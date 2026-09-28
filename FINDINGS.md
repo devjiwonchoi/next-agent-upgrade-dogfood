@@ -10,6 +10,7 @@ for final human review; a green build alone does not close a finding.
 | ID | Priority | Status | Finding | Affected runs | Evidence | Fix |
 | --- | --- | --- | --- | --- | --- | --- |
 | AGENT-001 | P2 | open | `next upgrade apps/giscus --ai` loads a config plugin with the repository root as `process.cwd()`, blocking app-path invocation. | giscus | [Reproduction](#agent-001-app-path-config-load) | — |
+| AGENT-002 | P2 | open | The prepared codemod cannot detect React when the app aliases `react` to `@preact/compat`, so the guided migration stops before editing files. | giscus | [Reproduction](#agent-002-react-alias-detection) | — |
 
 Add a row only for a reproducible problem with the Agent Upgrade workflow,
 its guidance, or its migrations. Order open rows by priority, then by the
@@ -26,7 +27,7 @@ visible until the fix is verified on a fresh dogfood run.
 
 | App | Source commit | Next.js before → target | Policy | Outcome | Upgrade PR | Review | Findings |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `apps/giscus` | [`3d64302`](https://github.com/giscus/giscus/commit/3d6430237108ca4ee3eb6a1a20595201c09c72d5) | `^12.3.4` → pending | pending | not started | — | — | — |
+| `apps/giscus` | [`3d64302`](https://github.com/giscus/giscus/commit/3d6430237108ca4ee3eb6a1a20595201c09c72d5) | `12.3.4` → `15.5.26` | security | PR open | [#1](https://github.com/devjiwonchoi/next-agent-upgrade-dogfood/pull/1) | pending | AGENT-001, AGENT-002 |
 
 Use one row per invocation. Outcomes are `not started`, `no upgrade`,
 `blocked`, `PR open`, or `reviewed`. Record `no upgrade` as an observed result,
@@ -75,3 +76,36 @@ one another's findings.
 - **Next check:** Determine whether the CLI can load app config under the app
   working directory without disrupting other monorepo flows; verify the fix
   with this reproduction and a standard app-path run.
+
+### 2026-09-28: giscus security upgrade
+
+- Baseline: `main@f42abd0`, source `giscus/giscus@3d6430237108ca4ee3eb6a1a20595201c09c72d5`.
+  Agent: Codex in the current task. CLI: `next@16.4.0-canary.51`.
+- Invoking `next upgrade --ai` from `apps/giscus` selected the security target
+  15.5.26 and supplied the exact codemod command. The codemod stopped before
+  editing files because the Preact React alias does not export `react/package.json`.
+- The manual migration updated Next.js, its analyzer and ESLint config, React,
+  React DOM, their types, and the Yarn lockfile. Next.js 15 rejected the Preact
+  alias at startup, so the Preact plugin and alias were removed. Unsupported
+  experimental config flags were removed. Next.js 15.5.26 lacks
+  `experimental.agenticAutoUpgrade`, so the requested policy setting was skipped.
+- App lint passed. The direct Next.js production build passed with network
+  access, including type checking and 116 localized static pages. The production
+  server returned HTTP 200 for `/`, `/widget`, and `/client.js`.
+- The upstream `yarn build` script still fails at its Closure Compiler step
+  with the baseline macOS x86 executable error before invoking `next build`.
+  Full GitHub App and service-backed widget behavior was not tested.
+- Migration commit: `7811842`; draft upgrade [PR #1](https://github.com/devjiwonchoi/next-agent-upgrade-dogfood/pull/1).
+
+### AGENT-002: React alias detection
+
+- **Expected:** The prepared codemod either handles the app's declared React
+  alias or reports an actionable migration path.
+- **Observed:** From `apps/giscus`,
+  `npx --yes @next/codemod@16.4.0-canary.51 upgrade 15.5.26 --yes --skip-adoption`
+  exited before editing with `Failed to detect the installed React version`.
+  Its version lookup resolves `react/package.json`, which the installed
+  `@preact/compat` alias does not export.
+- **Next check:** Add an alias fixture to the codemod's upgrade tests and
+  determine whether the tool can identify the alias and explain the supported
+  React migration. Verify on a fresh giscus snapshot.
