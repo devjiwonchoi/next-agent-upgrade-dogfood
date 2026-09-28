@@ -24,6 +24,16 @@ Source snapshots and this report live on `main`. Each attempt runs on its own br
 | Linkwarden | 15.5.21 → 15.5.26 | [Ready PR #8](https://github.com/devjiwonchoi/next-agent-upgrade-dogfood/pull/8) | Web and router pins aligned after review. Immutable install passes; both builds stop at the existing `CollectionCard.tsx:54` type error. |
 | Supabase Studio | 16.3.5 | No PR | `--ai` found no security update needed. |
 | NotionNext | 15.5.25 | No PR | `--ai` found no security update needed. |
+| Onlook | 16.0.7 → 16.3.6 | [Draft PR #24](https://github.com/devjiwonchoi/next-agent-upgrade-dogfood/pull/24) | Frozen install passes; client build fails on module boundaries and missing modules. Baseline comparison pending. Lockfile drops the omitted admin submodule. |
+| prompts.chat | Not assessed | [Draft PR #21](https://github.com/devjiwonchoi/next-agent-upgrade-dogfood/pull/21) | Source lockfile tarball returns 404; CLI then cannot load `@sentry/nextjs` from config. |
+| chat-js | Not assessed | [Draft PR #19](https://github.com/devjiwonchoi/next-agent-upgrade-dogfood/pull/19) | Frozen Bun install rejects source overrides; npx also rejects the Bun-style override before launching Next.js. |
+| Midday | 16.2.1 → 16.3.6 | [Ready PR #27](https://github.com/devjiwonchoi/next-agent-upgrade-dogfood/pull/27) | Frozen install and dashboard and website builds pass at the target version. Source config skips type validation; service flows unverified. |
+| Workout.cool | 16.2.1 → 16.3.6 | [Ready PR #22](https://github.com/devjiwonchoi/next-agent-upgrade-dogfood/pull/22) | Build and type check pass with placeholders; sitemap uses its fallback without a database. Review found no defect; service flows unverified. |
+| Git City | Not assessed | [Draft PR #20](https://github.com/devjiwonchoi/next-agent-upgrade-dogfood/pull/20) | Source npm lockfile lacks esbuild platform entries; CLI cannot find installed Next.js. |
+| Tailwind CSS website | Not run | Pending | No license found; awaiting redistribution permission before importing. |
+| Morphic | 16.2.6 → 16.3.6 | [Ready PR #26](https://github.com/devjiwonchoi/next-agent-upgrade-dogfood/pull/26) | Frozen install, type check, lint, and production build pass. Database and AI-provider flows unverified. |
+| Typebot | 16.2.9 → 16.3.6 | [Draft PR #25](https://github.com/devjiwonchoi/next-agent-upgrade-dogfood/pull/25) | Frozen install passes; builder type check needs workspace declarations built. Review found unrelated lockfile pruning/deduplication; no confirmed migration defect. |
+| TypeHero | 16.2.10 → 16.3.6 | [Draft PR #23](https://github.com/devjiwonchoi/next-agent-upgrade-dogfood/pull/23) | Web compiles and type checks after Prisma generation; sitemap needs MySQL. Review found no diff defect; baseline comparison and full build remain pending. |
 
 ## Workflow findings
 
@@ -36,5 +46,8 @@ Source snapshots and this report live on `main`. Each attempt runs on its own br
 | AGENT-005 | P1 | NextChat's Yarn upgrade path invoked `npm install` and left a partial manifest after failure. | Respect the app package manager and restore files on failure. |
 | AGENT-006 | P2 | Glass and Papermark received ESLint configs that fail to load. | Fix the generated flat-config import and shape. |
 | AGENT-007 | P2 | Web-only upgrades left consumed workspaces on older Next.js in Linkwarden and Dub. | Check local packages that import Next.js and align their pins. |
+| AGENT-008 | P2 | Bun regeneration in Typebot pruned optional peers and deduplicated unrelated dependencies. | Review lockfile scope before publishing; this is agent/package-manager behavior, not a confirmed Next.js fault. |
+
+Batch 3 used `next@16.4.0-canary.51 upgrade --ai` in separate worktrees. Six assessments selected 16.3.6; the agent applied the handoffs. The target does not support the requested `experimental.agenticAutoUpgrade` option, so it was omitted as instructed. The three preflight blockers are source/launcher issues; Onlook's build failure has not been compared with baseline.
 
 No migration PR has merged. OpenResume PR #3 still needs a decision on its React 19 peer conflicts. Builds do not verify service-backed flows.
