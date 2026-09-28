@@ -10,7 +10,8 @@ onlyBuiltDependencies:
 minimumReleaseAge: 10080
 # Security hotfixes younger than the 7-day gate; remove entries once they age out.
 minimumReleaseAgeExclude:
-  - next@16.2.11 # 9 advisories incl. SSRF + middleware bypass (published 2026-07-21)
+  - next@16.3.6 # security upgrade target (published 2026-09-23)
+  - eslint-config-next@16.3.6
   - '@next/*' # env/swc/eslint siblings; versions are exact-pinned by next itself
   - brace-expansion@5.0.8 # GHSA-mh99-v99m-4gvg DoS (published 2026-07-23)
 
