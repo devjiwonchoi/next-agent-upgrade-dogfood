@@ -15,19 +15,19 @@
     "@react-pdf/renderer": "^3.1.10",
     "@reduxjs/toolkit": "^1.9.5",
     "@types/node": "20.2.5",
-    "@types/react": "18.2.7",
-    "@types/react-dom": "18.2.4",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
     "@vercel/analytics": "^1.0.1",
     "autoprefixer": "10.4.14",
     "eslint": "8.41.0",
-    "eslint-config-next": "13.4.4",
-    "next": "13.4.4",
+    "eslint-config-next": "15.5.26",
+    "next": "15.5.26",
     "pdfjs": "^2.5.0",
     "pdfjs-dist": "^3.7.107",
     "postcss": "8.4.24",
-    "react": "18.2.0",
+    "react": "19.3.0",
     "react-contenteditable": "^3.3.7",
-    "react-dom": "18.2.0",
+    "react-dom": "19.3.0",
     "react-frame-component": "^5.2.6",
     "react-redux": "^8.0.7",
     "tailwind-scrollbar": "^3.0.4",
@@ -41,5 +41,9 @@
     "jest": "^29.5.0",
     "jest-environment-jsdom": "^29.5.0",
     "prettier-plugin-tailwindcss": "^0.2.1"
+  },
+  "overrides": {
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0"
   }
 }
