@@ -30,6 +30,7 @@ Each `apps/` directory is copied from the listed public source commit. Upgrade b
 | Midday | `midday-ai/midday` | `51587319f26a0ffaa9dfccab1920373cb65689b7` | `apps/midday/apps/dashboard` |
 | Workout.cool | `Snouzy/workout-cool` | `3e65987f4f11bb86483ff9dfc82b831b9a94cb6d` | `apps/workout-cool` |
 | Git City | `srizzon/git-city` | `2b93a5c8f7b8b452463b6da3dd70941b800d4783` | `apps/git-city` |
+| Tailwind CSS website | `tailwindlabs/tailwindcss.com` | `7f92c2213315c195dae583d68752da4042da3ade` | `apps/tailwindcss-website` |
 | Morphic | `miurla/morphic` | `25d572a110c3c12831d85d26b048b2cd2f6bd22c` | `apps/morphic` |
 | Typebot | `baptisteArno/typebot.io` | `3f2870121bf5aa6e8d189cedacfa8c0d20d6774f` | `apps/typebot/apps/builder` |
 | TypeHero | `typehero/typehero` | `7871629e9a77718312e68a367644ce3fc286ef04` | `apps/typehero/apps/web` |
@@ -37,5 +38,6 @@ Each `apps/` directory is copied from the listed public source commit. Upgrade b
 Glass includes its pinned `aec` submodule contents at `9e11f4f95707714464194bdfc9db0222ec5c6163`. These are source snapshots, not upstream Git histories.
 
 Overreacted has no repository license file; the dogfood repository owner confirmed redistribution permission for this snapshot.
+Tailwind CSS website has no repository license file; the dogfood repository owner confirmed redistribution permission for this snapshot.
 The Supabase snapshot omits `apps/ui-library/.env` and `examples/product-sample-supabase-kt/local.properties`; they are local configuration files outside the selected Studio app.
 Onlook's `apps/admin` submodule is not included; the selected Next.js app is in `apps/web/client`.
