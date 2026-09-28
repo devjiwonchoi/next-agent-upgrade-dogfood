@@ -34,6 +34,16 @@ Source snapshots and this report live on `main`. Each attempt runs on its own br
 | Morphic | 16.2.6 → 16.3.6 | [Ready PR #26](https://github.com/devjiwonchoi/next-agent-upgrade-dogfood/pull/26) | Frozen install, type check, lint, and production build pass. Database and AI-provider flows unverified. |
 | Typebot | 16.2.9 → 16.3.6 | [Draft PR #25](https://github.com/devjiwonchoi/next-agent-upgrade-dogfood/pull/25) | Frozen install passes; builder type check needs workspace declarations built. Review found unrelated lockfile pruning/deduplication; no confirmed migration defect. |
 | TypeHero | 16.2.10 → 16.3.6 | [Draft PR #23](https://github.com/devjiwonchoi/next-agent-upgrade-dogfood/pull/23) | Web compiles and type checks after Prisma generation; sitemap needs MySQL. Review found no diff defect; baseline comparison and full build remain pending. |
+| Vercel Chatbot | 16.2.10 → 16.3.6 | [Ready PR #35](https://github.com/devjiwonchoi/next-agent-upgrade-dogfood/pull/35) | Frozen install and production build with TypeScript passed; service flows unverified. |
+| Mission Control | 16.2.11 → 16.3.6 | [Ready PR #34](https://github.com/devjiwonchoi/next-agent-upgrade-dogfood/pull/34) | Frozen install and build passed. Exact release-age exceptions needed to move with the target. |
+| SurfSense | 16.2.12 → 16.3.6 | [Ready PR #29](https://github.com/devjiwonchoi/next-agent-upgrade-dogfood/pull/29) | Frozen install and build passed. Existing FlatCompat ESLint imports failed with the aligned config package; flat exports load. Source skips type validation. |
+| Cap | 16.3.0 → 16.3.6 | [Ready PR #37](https://github.com/devjiwonchoi/next-agent-upgrade-dogfood/pull/37) | Frozen Bun install and build passed with required `NEXT_PUBLIC_WEB_URL` placeholder. |
+| FastGPT | 16.3.0 → 16.3.6 | [Ready PR #30](https://github.com/devjiwonchoi/next-agent-upgrade-dogfood/pull/30) | Frozen install and build passed after local SDK compilation. Normal postinstall failed; lockfile regeneration has broad churn. |
+| 8bitcn-ui | 16.3.0 → 16.3.6 | [Ready PR #31](https://github.com/devjiwonchoi/next-agent-upgrade-dogfood/pull/31) | Frozen install and build passed, including TypeScript and 291 static pages. |
+| Postiz | 16.3.1 → 16.3.6 | [Ready PR #32](https://github.com/devjiwonchoi/next-agent-upgrade-dogfood/pull/32) | Frozen install and frontend build passed under required Node 22. |
+| termcn | 16.3.1 → 16.3.6 | [Ready PR #33](https://github.com/devjiwonchoi/next-agent-upgrade-dogfood/pull/33) | Frozen install and build passed, including TypeScript and 742 static pages. |
+| Hexclave | 16.3.1 → 16.3.6 | [Draft PR #36](https://github.com/devjiwonchoi/next-agent-upgrade-dogfood/pull/36) | Target installs, but prerequisite workspace build fails on existing TypeScript TS2883 errors; dashboard build unverified. |
+| LobeHub | 16.3.6 installed | No PR | `--ai` found no security update needed. Its `^16.3.0` range resolved to 16.3.6 without a root lockfile. |
 
 ## Workflow findings
 
@@ -49,5 +59,7 @@ Source snapshots and this report live on `main`. Each attempt runs on its own br
 | AGENT-008 | P2 | Bun regeneration in Typebot pruned optional peers and deduplicated unrelated dependencies. | Review lockfile scope before publishing; this is agent/package-manager behavior, not a confirmed Next.js fault. |
 
 Batch 3 used `next@16.4.0-canary.51 upgrade --ai` in separate worktrees. Seven assessments selected 16.3.6; the agent applied the handoffs. The target does not support the requested `experimental.agenticAutoUpgrade` option, so it was omitted as instructed. The three preflight blockers are source/launcher issues; Onlook's build failure has not been compared with baseline.
+
+Batch 4 used the same pinned CLI and separate worktrees. Eight migrations built, one remains a draft after a workspace build blocker, and one needed no update. SurfSense and two release-age policies needed app-specific handling; these are not confirmed Next.js CLI faults. Live service flows remain unverified.
 
 No migration PR has merged. OpenResume PR #3 still needs a decision on its React 19 peer conflicts. Builds do not verify service-backed flows.
