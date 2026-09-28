@@ -9,6 +9,7 @@ for final human review; a green build alone does not close a finding.
 
 | ID | Priority | Status | Finding | Affected runs | Evidence | Fix |
 | --- | --- | --- | --- | --- | --- | --- |
+| AGENT-003 | P1 | open | After the codemod stopped, the agent removed giscus's Preact integration and changed its React implementation without first treating that behavior change as a migration blocker for human review. | giscus | [Run and review gate](#agent-003-unreviewed-preact-removal) | — |
 | AGENT-001 | P2 | open | `next upgrade apps/giscus --ai` loads a config plugin with the repository root as `process.cwd()`, blocking app-path invocation. | giscus | [Reproduction](#agent-001-app-path-config-load) | — |
 | AGENT-002 | P2 | open | The prepared codemod cannot detect React when the app aliases `react` to `@preact/compat`, so the guided migration stops before editing files. | giscus | [Reproduction](#agent-002-react-alias-detection) | — |
 
@@ -27,7 +28,7 @@ visible until the fix is verified on a fresh dogfood run.
 
 | App | Source commit | Next.js before → target | Policy | Outcome | Upgrade PR | Review | Findings |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `apps/giscus` | [`3d64302`](https://github.com/giscus/giscus/commit/3d6430237108ca4ee3eb6a1a20595201c09c72d5) | `12.3.4` → `15.5.26` | security | PR open | [#1](https://github.com/devjiwonchoi/next-agent-upgrade-dogfood/pull/1) | pending | AGENT-001, AGENT-002 |
+| `apps/giscus` | [`3d64302`](https://github.com/giscus/giscus/commit/3d6430237108ca4ee3eb6a1a20595201c09c72d5) | `12.3.4` → `15.5.26` | security | PR open | [#1](https://github.com/devjiwonchoi/next-agent-upgrade-dogfood/pull/1) | independent review complete; human review pending | AGENT-003, AGENT-001, AGENT-002 |
 
 Use one row per invocation. Outcomes are `not started`, `no upgrade`,
 `blocked`, `PR open`, or `reviewed`. Record `no upgrade` as an observed result,
@@ -96,6 +97,33 @@ one another's findings.
   with the baseline macOS x86 executable error before invoking `next build`.
   Full GitHub App and service-backed widget behavior was not tested.
 - Migration commit: `7811842`; draft upgrade [PR #1](https://github.com/devjiwonchoi/next-agent-upgrade-dogfood/pull/1).
+
+### AGENT-003: unreviewed Preact removal
+
+- **Expected:** When an upgrade requires replacing an app's React compatibility
+  layer, the agent should stop and present the reason, alternatives, and likely
+  behavior impact for human review before changing packages or opening a PR
+  that presents the migration as complete.
+- **Observed:** With giscus at source commit `3d6430237108ca4ee3eb6a1a20595201c09c72d5`,
+  `next@16.4.0-canary.51 upgrade --ai` prepared a security upgrade to 15.5.26.
+  The prescribed codemod then failed on the React alias. During manual work,
+  Next.js 15 rejected the existing Preact integration, so migration commit
+  `7811842` removed `next-plugin-preact`, `preact`,
+  `preact-render-to-string`, the `@preact/compat` React aliases,
+  `react-ssr-prepass`, and the development `preact/debug` import, replacing
+  the aliases with React 19.2.0. This is a substantial runtime change beyond
+  updating Next.js. It was made without a separate human decision on that
+  tradeoff.
+- **Review gate:** The independent review of PR head `4e5d9fb` found no
+  actionable code defect, and lint and a direct production build passed. The
+  service-backed comments widget and hydration were not verified; a bare
+  `/widget` HTTP 200 does not establish equivalent behavior. Keep
+  [upgrade PR #1](https://github.com/devjiwonchoi/next-agent-upgrade-dogfood/pull/1)
+  open for human review of the Preact-to-React change.
+- **Next check:** Determine whether the Preact integration can be retained on
+  the target Next.js version. If it cannot, make the migration choice explicit
+  in the upgrade workflow and verify the live widget before treating the run
+  as successful.
 
 ### AGENT-002: React alias detection
 
