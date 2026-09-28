@@ -258,7 +258,7 @@ interface UploadZoneProps extends React.PropsWithChildren {
   ) => void;
   onUploadAborted?: () => void;
   setRejectedFiles: React.Dispatch<React.SetStateAction<RejectedFile[]>>;
-  cancelledItemIdsRef?: React.RefObject<Set<string>>;
+  cancelledItemIdsRef?: React.RefObject<Set<string> | null>;
   folderPathName?: string;
   dataroomId?: string;
   dataroomName?: string;

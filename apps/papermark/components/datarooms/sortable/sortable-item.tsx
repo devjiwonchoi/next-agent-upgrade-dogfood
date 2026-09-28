@@ -8,7 +8,7 @@ export type ItemCategory = "folder" | "document";
 interface SortableItemProps {
   id: string;
   category: ItemCategory;
-  children: React.ReactElement;
+  children: React.ReactElement<any>;
 }
 
 export const SortableItem: React.FC<SortableItemProps> = ({

@@ -41,7 +41,7 @@ interface UploadProgressContextType {
   addCancelFn: (fn: () => void) => void;
   cancelItem: (itemId: string) => void;
   cancelledItemIds: Set<string>;
-  cancelledItemIdsRef: React.RefObject<Set<string>>;
+  cancelledItemIdsRef: React.RefObject<Set<string> | null>;
   /**
    * Triggers registered by the currently-mounted `UploadZone`, or `null`
    * if none is mounted in the visible tree (e.g. while the dataroom search

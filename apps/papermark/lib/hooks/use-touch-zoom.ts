@@ -2,7 +2,7 @@ import { RefObject, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 type UseTouchZoomOptions = {
   /** Element that receives the touch gestures (the scroll/zoom container). */
-  containerRef: RefObject<HTMLElement>;
+  containerRef: RefObject<HTMLElement | null>;
   /** Current zoom scale. */
   scale: number;
   /** Setter for the zoom scale (functional updates supported). */

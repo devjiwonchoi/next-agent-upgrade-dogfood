@@ -53,13 +53,14 @@ export const metadata: Metadata = {
 };
 
 interface PageProps {
-  params: { token: string };
+  params: Promise<{ token: string }>;
 }
 
 export default async function ConfirmEmailChangePage(props: PageProps) {
   return (
     <div className="flex flex-col items-center justify-center gap-6 text-center">
-      <VerifyEmailChange {...props} />
+      <VerifyEmailChange /* @next-codemod-error 'props' is used with spread syntax (...). Any asynchronous properties of 'props' must be awaited when accessed. */
+      {...props} />
     </div>
   );
 }

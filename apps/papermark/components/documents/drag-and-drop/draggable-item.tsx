@@ -11,7 +11,7 @@ interface DraggableItemProps {
   isSelected: boolean;
   onSelect: (id: string, type: "document" | "folder") => void;
   isDraggingSelected: boolean;
-  children: React.ReactElement;
+  children: React.ReactElement<any>;
   type: "document" | "folder";
 }
 

@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/tooltip";
 
 interface ResponsiveButtonProps extends ButtonProps {
-  icon: React.ReactElement;
+  icon: React.ReactElement<any>;
   text: string;
   breakpoint?: number;
 }

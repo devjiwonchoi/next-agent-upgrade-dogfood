@@ -8,7 +8,7 @@ const Portal = ({
   children,
 }: {
   containerId?: string | null;
-  children: React.ReactElement;
+  children: React.ReactElement<any>;
   className?: string;
 }) => {
   const [mounted, setMounted] = React.useState(false);

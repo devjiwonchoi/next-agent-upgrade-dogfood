@@ -5,6 +5,7 @@ import {
   useEffect,
   useMemo,
   useState,
+  type JSX,
 } from "react";
 
 import { useTeams } from "@/lib/swr/use-teams";
