@@ -35,7 +35,7 @@ type EmailWithMetadata = {
     from: string;
     to: string;
     subject: string;
-    react: React.ReactElement;
+    react: React.ReactElement<any>;
     text: string;
     headers: {
       "X-Entity-Ref-ID": string;

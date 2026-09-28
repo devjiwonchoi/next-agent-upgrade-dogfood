@@ -38,7 +38,7 @@ export function usePrefersLightText() {
 
 interface FolderProps {
   name: string;
-  label?: ReactElement;
+  label?: ReactElement<any>;
   open?: boolean;
   defaultOpen?: boolean;
   active?: boolean;
@@ -51,7 +51,7 @@ interface FolderProps {
 
 interface FileProps {
   name: string;
-  label?: ReactElement;
+  label?: ReactElement<any>;
   active?: boolean;
   onToggle?: (active: boolean) => void;
 }
@@ -64,7 +64,7 @@ function Tree({
   children: ReactNode;
   prefersLightText?: boolean;
   style?: CSSProperties;
-}): ReactElement {
+}): ReactElement<any> {
   return (
     <prefersLightTextCtx.Provider value={prefersLightText ?? false}>
       <div
@@ -77,7 +77,7 @@ function Tree({
   );
 }
 
-function Ident(): ReactElement {
+function Ident(): ReactElement<any> {
   const length = useIndent();
   return (
     <>
