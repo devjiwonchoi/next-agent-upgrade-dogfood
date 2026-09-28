@@ -13,4 +13,7 @@ allowBuilds:
 
 minimumReleaseAge: 10080
 minimumReleaseAgeExclude:
+  - next@16.3.6
+  - eslint-config-next@16.3.6
+  - "@next/*"
   - lucide-react
