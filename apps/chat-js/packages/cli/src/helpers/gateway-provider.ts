@@ -1,0 +1,84 @@
+import { readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
+
+import type { GatewaySelection } from "../registry/gateways";
+import { preflight } from "../utils/preflight";
+
+const sortJsonKeys = (value: unknown): unknown => {
+  if (Array.isArray(value)) {
+    return value.map(sortJsonKeys);
+  }
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .toSorted(([left], [right]) => {
+          if (left === right) {
+            return 0;
+          }
+          return left < right ? -1 : 1;
+        })
+        .map(([key, nestedValue]) => [key, sortJsonKeys(nestedValue)])
+    );
+  }
+  return value;
+};
+
+/** Wire the installed gateway; source and dependencies are installed by shadcn. */
+export const configureGatewayProvider = async (
+  destination: string,
+  selection: GatewaySelection
+): Promise<void> => {
+  await preflight(destination, [
+    "lib/ai/gateway-model-defaults.ts",
+    "lib/ai/models.generated.ts",
+    ".env.example",
+  ]);
+  const snapshotPath = path.join(destination, "lib/ai/models.generated.ts");
+  const snapshot = await readFile(snapshotPath, "utf-8").catch((error) => {
+    if (error.code === "ENOENT") {
+      return "";
+    }
+    throw error;
+  });
+  const example = path.join(destination, ".env.example");
+  let env = await readFile(example, "utf-8").catch((error) => {
+    if (error.code === "ENOENT") {
+      return "";
+    }
+    throw error;
+  });
+  const { definition } = selection;
+  await writeFile(
+    path.join(destination, "lib/ai/gateway-model-defaults.ts"),
+    `import type { GatewayModelDefaults } from "@chat-js/gateways/defaults";
+import type { Gateway } from "./gateway";
+
+export const gatewayType = ${JSON.stringify(definition.id)} satisfies InstanceType<typeof Gateway>["type"];
+export const gatewayModelDefaults = ${JSON.stringify(sortJsonKeys(definition.defaults), null, 2)} satisfies GatewayModelDefaults<InstanceType<typeof Gateway>>;
+export const gatewayCapabilities = ${JSON.stringify(definition.capabilities)};
+export const gatewayEnvRequirements = ${JSON.stringify(definition.envRequirements)};
+export const gatewayEnvVariables = ${JSON.stringify([...new Set([...definition.envRequirements.flatMap((r) => r.options.flat()), ...definition.optionalEnv])])};
+`
+  );
+  if (
+    !snapshot.includes(`generatedForGateway = ${JSON.stringify(definition.id)}`)
+  ) {
+    await writeFile(
+      snapshotPath,
+      `import type { AiGatewayModel } from "@chat-js/gateways/models";
+
+export const generatedForGateway = ${JSON.stringify(definition.id)};
+// Populate this gateway's catalog with the fetch:models script after setting credentials.
+export const models: readonly AiGatewayModel[] = [];
+`
+    );
+  }
+  for (const name of new Set(
+    definition.envRequirements.flatMap((r) => r.options.flat())
+  )) {
+    if (!new RegExp(`^${name}=`, "mu").test(env)) {
+      env += `\n${name}=\n`;
+    }
+  }
+  await writeFile(example, env);
+};

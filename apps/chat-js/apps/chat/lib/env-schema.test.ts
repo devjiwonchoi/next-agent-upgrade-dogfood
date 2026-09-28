@@ -1,0 +1,81 @@
+import { describe, expect, test } from "vitest";
+import { z } from "zod";
+
+import { getEveRuntimeEnvOptions } from "./env-schema";
+
+const schema = z.object(getEveRuntimeEnvOptions({}));
+const valid = {
+  EVE_GATEWAY_SECRET: "a".repeat(32),
+  EVE_INTERNAL_ORIGIN: "http://localhost:3000",
+  WORKFLOW_POSTGRES_URL: "postgresql://localhost/eve",
+};
+
+describe("EVE runtime environment", () => {
+  test("requires the complete runtime contract", () => {
+    expect(schema.safeParse(valid).success).toBe(true);
+    expect(schema.safeParse({}).success).toBe(false);
+  });
+
+  test.each([
+    "https://example.com",
+    "https://worker.internal:8443",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://127.2.3.4:3000",
+    "http://[::1]:3000",
+    "http://[0:0:0:0:0:0:0:1]:3000",
+  ])("allows a secure or loopback origin: %s", (EVE_INTERNAL_ORIGIN) => {
+    expect(schema.safeParse({ ...valid, EVE_INTERNAL_ORIGIN }).success).toBe(
+      true
+    );
+  });
+
+  test.each([
+    "http://example.com",
+    "http://worker.internal:8080",
+    "http://10.0.0.1",
+    "http://0.0.0.0:3000",
+    "http://[::]:3000",
+    "http://[2001:db8::1]",
+    "http://localhost.example.com",
+    "http://127.0.0.1.example.com",
+    "http://localhost@example.com",
+    "http://user:password@localhost:3000",
+    "https://example.com?token=1",
+    "https://example.com#fragment",
+    "https://user:password@example.com",
+  ])("rejects an unsafe or non-origin URL: %s", (EVE_INTERNAL_ORIGIN) => {
+    expect(schema.safeParse({ ...valid, EVE_INTERNAL_ORIGIN }).success).toBe(
+      false
+    );
+  });
+
+  test.each([
+    { ...valid, EVE_GATEWAY_SECRET: "short" },
+    { ...valid, EVE_INTERNAL_ORIGIN: "not-a-url" },
+    { ...valid, EVE_INTERNAL_ORIGIN: "https://example.com/api/eve" },
+    { ...valid, WORKFLOW_POSTGRES_URL: "not-a-url" },
+    { ...valid, EVE_INTERNAL_ORIGIN: "postgresql://localhost/eve" },
+    { ...valid, WORKFLOW_POSTGRES_URL: "https://localhost/eve" },
+  ])("rejects malformed runtime configuration", (value) => {
+    expect(schema.safeParse(value).success).toBe(false);
+  });
+});
+
+test.each(["preview", "production"])(
+  "Vercel %s needs no workflow database",
+  (VERCEL_ENV) => {
+    const managed = z.object(
+      getEveRuntimeEnvOptions({ VERCEL: "1", VERCEL_ENV })
+    );
+    const { WORKFLOW_POSTGRES_URL: _unused, ...credentials } = valid;
+    expect(managed.safeParse(credentials).success).toBe(true);
+    expect(
+      managed.safeParse({ ...credentials, WORKFLOW_POSTGRES_URL: "" }).success
+    ).toBe(true);
+    expect(
+      managed.safeParse({ ...credentials, EVE_GATEWAY_SECRET: "short" }).success
+    ).toBe(false);
+    expect(schema.safeParse(credentials).success).toBe(false);
+  }
+);

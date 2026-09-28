@@ -1,0 +1,119 @@
+---
+title: "Quickstart"
+description: "Get ChatJS running in minutes"
+---
+
+## Prerequisites
+
+Install **Node.js 24+** and a package manager: npm, yarn, pnpm, or Bun.
+
+## 1. Create your project
+
+```bash
+npx @chat-js/cli@latest create my-app
+cd my-app
+```
+
+Choose your AI gateway, features, and authentication providers. The CLI generates `chat.config.ts` and lists the credentials your choices require.
+
+## 2. Configure environment variables
+
+```bash
+cp .env.example .env.local
+```
+
+Fill in `.env.local` using the generated example. You need:
+
+| Setting | Setup guide |
+| --- | --- |
+| PostgreSQL connection | [PostgreSQL setup](./reference/database#eve-workflow-database) |
+| AI gateway credentials | [Gateways](./gateways/overview) |
+| Authentication provider credentials and secrets | [Authentication](./core/authentication) and [environment variables](./reference/env-vars) |
+| Credentials for any optional features you selected | [Environment variables](./reference/env-vars) |
+
+Generate `AUTH_SECRET` and `EVE_GATEWAY_SECRET` independently by running `openssl rand -base64 32` once for each. Leave `EVE_INTERNAL_ORIGIN` blank for the integrated worker; it follows the deployment or local app. Local/self-hosted workflows default to `DATABASE_URL` and require a direct or session connection. Set `WORKFLOW_POSTGRES_URL` to use a separate workflow database. Vercel deployments use managed Workflow and do not need that variable.
+
+## 3. Set up the application
+
+After creating your database and configuring `.env.local`, run:
+
+```bash
+npm run setup
+```
+
+This applies application migrations and prepares the configured EVE world. The current setup supports local and hosted PostgreSQL. Run it for a fresh installation and when an upgrade requires database changes. See [database setup](./reference/database#eve-workflow-database) for details.
+
+## 4. Start the app
+
+```bash
+npm run dev
+```
+
+Open `http://localhost:3000` and send a message. The development server starts EVE automatically.
+
+Customize features and branding in `chat.config.ts`. See [Configuration](./core/configuration) when you're ready to make changes.
+
+## Deploying to Production
+
+Once you're running locally, deploy your app:
+
+<CardGroup cols={3}>
+  <Card title="Vercel" icon="triangle" href="/deployment/vercel">
+    Recommended. Integrated database, blob storage, and AI Gateway.
+  </Card>
+  <Card title="Docker" icon="container" href="/deployment/docker">
+    Containerized deployment for any platform.
+  </Card>
+  <Card title="Self-Hosted" icon="server" href="/deployment/self-hosted">
+    Deploy to any Node.js platform.
+  </Card>
+</CardGroup>
+
+## Troubleshooting
+
+<Accordion>
+  <AccordionItem title="Missing environment variables error">
+    ChatJS validates env vars at build time. Check `.env.local` has all required
+    variables and restart the dev server.
+  </AccordionItem>
+  <AccordionItem title="Database connection failed">
+    Verify `DATABASE_URL` is correct and the database is running. For local
+    PostgreSQL, check the service is started.
+  </AccordionItem>
+  <AccordionItem title="OAuth redirect error">
+    Make sure the callback URL in your OAuth app matches exactly. For local dev,
+    use `http://localhost:3000/api/auth/callback/{provider}`.
+  </AccordionItem>
+</Accordion>
+
+<Accordion>
+<AccordionItem title="Optional Features">
+  These environment variables enable additional capabilities:
+
+| Variable | Feature | Setup Guide |
+| --- | --- | --- |
+| `TAVILY_API_KEY` | Web search | [Tavily](https://app.tavily.com) |
+| `FIRECRAWL_API_KEY` | Web search | [Firecrawl](https://firecrawl.dev) |
+| `LANGFUSE_PUBLIC_KEY` | LLM observability | [Langfuse](https://langfuse.com) |
+| `LANGFUSE_SECRET_KEY` | LLM observability | [Langfuse](https://langfuse.com) |
+| `MCP_ENCRYPTION_KEY` | MCP connectors | `openssl rand -base64 32` (must be exactly 44 chars) |
+| `CRON_SECRET` | Cleanup cron job | [Generate](https://generate-secret.vercel.app/32) |
+
+</AccordionItem>
+</Accordion>
+
+## Next Steps
+
+You're up and running. Here's where to go next:
+
+<CardGroup cols={3}>
+  <Card title="Configuration" icon="settings" href="/core/configuration">
+    Customize features, branding, and settings in chat.config.ts
+  </Card>
+  <Card title="AI Capabilities" icon="sparkles" href="/features/overview">
+    Explore built-in tools: web search, image generation, code execution
+  </Card>
+  <Card title="Desktop App" icon="monitor" href="/platforms/desktop">
+    Package your app as a native desktop application with Electron
+  </Card>
+</CardGroup>

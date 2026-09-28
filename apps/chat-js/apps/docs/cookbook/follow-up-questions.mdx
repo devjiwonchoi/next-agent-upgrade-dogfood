@@ -1,0 +1,35 @@
+---
+title: Follow-up Questions
+description: Generate contextual suggestions through an EVE turn-completion hook
+---
+
+ChatJS can add three to five follow-up suggestions after an EVE response completes. Suggestions are annotations on the native assistant message, so they stay out of later model context and survive transcript recovery.
+
+## Configure the model
+
+Enable the feature and select a fast model in `chat.config.ts`:
+
+```ts
+ai: {
+  tools: {
+    followupSuggestions: {
+      enabled: true,
+      default: "google/gemini-2.5-flash-lite",
+    },
+  },
+}
+```
+
+## Runtime flow
+
+1. `agent/hooks/followup-suggestions.ts` collects the latest user and assistant content for the native turn.
+2. `lib/eve/generate-followup-suggestions.ts` makes the auxiliary model call after the answer has completed.
+3. The hook stores valid suggestions in the EVE message annotation `followup-suggestions`.
+4. `components/eve/eve-messages.tsx` reads that annotation and renders the suggestions below the assistant message.
+
+The auxiliary generation never hides a completed answer. It records its model usage with the EVE turn so billing can reconcile it with the rest of the conversation.
+
+## Related
+
+- [Follow-up Suggestions](/features/follow-up-suggestions) for product behavior
+- [Native EVE Conversations](/cookbook/next-chat-transition) for the runtime boundary

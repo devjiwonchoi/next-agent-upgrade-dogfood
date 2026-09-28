@@ -1,0 +1,20 @@
+{
+  "extends": ["//"],
+  "tasks": {
+    "test:types": {
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/packages/registry/src/gateways/**",
+        "$TURBO_ROOT$/packages/registry/package.json"
+      ],
+      "outputs": ["dist/**"]
+    },
+    "test:unit": {
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/packages/registry/src/gateways/**",
+        "$TURBO_ROOT$/packages/registry/package.json"
+      ]
+    }
+  }
+}

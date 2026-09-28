@@ -1,0 +1,2500 @@
+"use client";
+
+import "@/lib/silenceThreeClockWarning";
+import { useRef, useEffect, useEffectEvent, useState, useMemo, type ReactNode } from "react";
+import { Canvas, useFrame, useThree } from "@react-three/fiber";
+import { OrbitControls, useGLTF, Stats, PerformanceMonitor } from "@react-three/drei";
+import { EffectComposer, Bloom, SMAA } from "@react-three/postprocessing";
+import * as THREE from "three";
+import { FLY_TUNE } from "./FlyTune";
+import { mapNav as mapNavBus } from "@/lib/map-nav";
+import { attachTrackpadOrbit } from "@/lib/trackpad-orbit";
+import CityScene from "./CityScene";
+import type { FocusInfo } from "./CityScene";
+import type { LiveSession } from "@/lib/useCodingPresence";
+import type { CityBuilding, CityPlaza, CityDecoration, CityRiver, CityBridge, SFRenderMap } from "@/lib/github";
+import { seededRandom } from "@/lib/github";
+import SFMapLayers from "./SFMapLayers";
+import SkyAds from "./SkyAds";
+import BuildingAds from "./BuildingAds";
+import type { SkyAd } from "@/lib/skyAds";
+import RaidSequence3D, { VehicleMesh } from "./RaidSequence3D";
+import type { RaidPhase } from "@/lib/useRaidSequence";
+import type { RaidExecuteResponse } from "@/lib/raid";
+import { SF_PLAZA_SCALE, plazaCenterWorld } from "@/lib/sponsors/sfPlaza";
+import { sunPosition, samplePalette, skyState } from "@/lib/sky";
+import WhiteRabbit from "./WhiteRabbit";
+import CelebrationEffect from "./CelebrationEffect";
+import ComparePath from "./ComparePath";
+import CompareCinematic from "./CompareCinematic";
+import CompareSplitScreen from "./CompareSplitScreen";
+import LocalizedFireworks from "./LocalizedFireworks";
+import WallpaperParallax from "./WallpaperParallax";
+import ThemeSkyFX from "./ThemeSkyFX";
+import RemotePilots from "./RemotePilots";
+import type { RemotePilot, ActiveProjectile, SelfPvpState, PendingRespawn } from "@/lib/useFlyPresence";
+import ProjectileSwarm from "./ProjectileSwarm";
+import BossPreview, { type BossVariant, type Phase as BossPhase } from "./BossPreview";
+import BossEvent from "./BossEvent";
+import { THEMES, CityExposure, ThemeLights } from "./city/theme";
+import { StreetLamp, ParkBench, Fountain, InstancedDecorations, _dBox, _dPlane } from "./city/decorations";
+
+export { THEME_NAMES } from "./city/theme";
+export type { BuildingColors } from "./city/theme";
+
+// ─── Paper Plane (GLB model) ─────────────────────────────────
+
+function PlaneModel() {
+  const { scene } = useGLTF("/models/paper-plane.glb");
+
+  return (
+    <group scale={[3, 3, 3]} rotation={[0, Math.PI / 2, 0]}>
+      <primitive object={scene} />
+    </group>
+  );
+}
+
+useGLTF.preload("/models/paper-plane.glb");
+
+// ─── Intro Flyover ──────────────────────────────────────────
+
+const INTRO_DURATION = 14; // seconds
+
+// Without the SF map the plaza (Founder Spire + town monument) is centred on
+// the world origin. Default camera target: plaza centre, mid-height.
+const TARGET_X = 0;
+const TARGET_Z = 0;
+const TARGET_Y = 270;
+
+// Mirror of original arc but from -Z side (front of city).
+// X is negated so screen-left→right matches the original.
+// Starts far-left (X+), sweeps right (X-), ends at orbit.
+const INTRO_TOP_Y = 540;
+const INTRO_WAYPOINTS: [number, number, number][] = [
+  [1600, 650, -1800],   // WP0: Far, screen-left - in fog
+  [1000, 640, -1300],   // WP1: Silhouette appears
+  [600, 630, -900],    // WP2: Buildings becoming clear
+  [200, 620, -700],    // WP3: Skirting the city edge
+  [-200, 620, -720],   // WP4: Crossing over (level)
+  [-500, 650, -780],   // WP5: Gently rising
+  [-700, 730, -900],   // WP6: Rising further
+  [-800, 850, -1000],   // WP7: Final orbit position (wide panorama)
+];
+
+// Look targets: gradual convergence from the city toward the plaza centre
+// (the town monument), no sudden jumps. Each entry is [fx, y, fz]: the X/Z
+// fraction of the way from the WP0 look point to the target, and a height.
+const INTRO_LOOK_START: [number, number] = [50, -50];
+const INTRO_LOOK_TARGETS: [number, number, number][] = [
+  [0, 350, 0],               // WP0: Toward city center
+  [0.4, 380, 0.2],           // WP1: Easing toward the plaza
+  [0.6, 410, 0.4],           // WP2: Converging
+  [0.8, 450, 0.7],           // WP3: Getting closer
+  [1, 500, 1],               // WP4: Almost there
+  [1, INTRO_TOP_Y, 1],       // WP5: Locking on
+  [1, INTRO_TOP_Y, 1],       // WP6: Holding
+  [1, 450, 1],               // WP7: Gently easing down to orbit height
+];
+
+function introLookPoint(i: number, target: [number, number], lookScale: number): THREE.Vector3 {
+  const [fx, y, fz] = INTRO_LOOK_TARGETS[i];
+  const sx = INTRO_LOOK_START[0] * lookScale;
+  const sz = INTRO_LOOK_START[1] * lookScale;
+  return new THREE.Vector3(sx + (target[0] - sx) * fx, y * lookScale, sz + (target[1] - sz) * fz);
+}
+
+// Smootherstep (Perlin): zero velocity AND zero acceleration at both ends
+function introEase(t: number): number {
+  const s = Math.max(0, Math.min(1, t));
+  return s * s * s * (s * (s * 6 - 15) + 10);
+}
+
+// Pre-allocated temp vectors for IntroFlyover (avoid GC in useFrame)
+const _introPos = new THREE.Vector3();
+const _introLook = new THREE.Vector3();
+
+function IntroFlyover({ onEnd, lookScale = 1, target }: { onEnd: () => void; lookScale?: number; target: [number, number] }) {
+  const { camera } = useThree();
+  const elapsed = useRef(0);
+  const ended = useRef(false);
+
+  // Build CatmullRom curves once; centripetal = no cusps on uneven spacing
+  const { posCurve, lookCurve } = useMemo(() => {
+    const posPoints = INTRO_WAYPOINTS.map(([x, y, z]) => new THREE.Vector3(x, y, z));
+    // lookScale lets SF (where the plaza is scaled down) aim lower.
+    const lookPoints = INTRO_LOOK_TARGETS.map((_, i) => introLookPoint(i, target, lookScale));
+    const posCurve = new THREE.CatmullRomCurve3(posPoints, false, 'centripetal');
+    const lookCurve = new THREE.CatmullRomCurve3(lookPoints, false, 'centripetal');
+    // Pre-compute arc-length tables so getPointAt() doesn't stutter on first call
+    posCurve.getLength();
+    lookCurve.getLength();
+    return { posCurve, lookCurve };
+  }, [lookScale, target]);
+
+  useEffect(() => {
+    camera.position.set(...INTRO_WAYPOINTS[0]);
+    camera.lookAt(introLookPoint(0, target, lookScale));
+  }, [camera, lookScale, target]);
+
+  useFrame((_, delta) => {
+    if (ended.current) return;
+    elapsed.current += delta;
+
+    const rawT = Math.min(elapsed.current / INTRO_DURATION, 1);
+    const t = introEase(rawT);
+
+    // getPointAt = arc-length parameterized = visually constant speed
+    posCurve.getPointAt(t, _introPos);
+    lookCurve.getPointAt(t, _introLook);
+
+    camera.position.copy(_introPos);
+    camera.lookAt(_introLook);
+
+    if (elapsed.current >= INTRO_DURATION && !ended.current) {
+      ended.current = true;
+      onEnd();
+    }
+  });
+
+  return null;
+}
+
+// ─── Rabbit Quest Flyover ────────────────────────────────────
+
+const RABBIT_FLYOVER_DURATION = 8; // seconds
+
+// Pre-allocated temp vectors for RabbitFlyover (avoid GC in useFrame)
+const _rabbitPos = new THREE.Vector3();
+const _rabbitLook = new THREE.Vector3();
+
+function buildRabbitCurves(plazaX: number, plazaZ: number) {
+  // Camera path: orbital start -> descend through city -> pass near rabbit -> climb back to orbital
+  const posPoints = [
+    new THREE.Vector3(800, 700, 1000),               // WP0: Orbital start (seamless)
+    new THREE.Vector3(500, 500, 700),                 // WP1: Descending
+    new THREE.Vector3(plazaX + 300, 300, plazaZ + 300), // WP2: Approaching
+    new THREE.Vector3(plazaX + 100, 80, plazaZ + 100),  // WP3: Close pass (high side)
+    new THREE.Vector3(plazaX - 80, 60, plazaZ - 60),    // WP4: Closest point (low swoop)
+    new THREE.Vector3(plazaX - 200, 150, plazaZ - 250),  // WP5: Pulling away
+    new THREE.Vector3(200, 450, 400),                 // WP6: Climbing back
+    new THREE.Vector3(800, 700, 1000),                // WP7: Orbital end (seamless)
+  ];
+
+  // Look targets converge on the plaza during the close pass, then drift to city center
+  const lookPoints = [
+    new THREE.Vector3(0, 200, 0),                       // WP0: City center
+    new THREE.Vector3(plazaX, 50, plazaZ),              // WP1: Starting to aim at plaza
+    new THREE.Vector3(plazaX, 10, plazaZ),              // WP2: Locked on plaza
+    new THREE.Vector3(plazaX, 5, plazaZ),               // WP3: Locked on plaza (ground level)
+    new THREE.Vector3(plazaX, 5, plazaZ),               // WP4: Holding on plaza
+    new THREE.Vector3(plazaX, 30, plazaZ),              // WP5: Lifting gaze
+    new THREE.Vector3(0, 150, 0),                       // WP6: Drifting to city center
+    new THREE.Vector3(0, 200, 0),                       // WP7: City center (match orbital)
+  ];
+
+  const posCurve = new THREE.CatmullRomCurve3(posPoints, false, "centripetal");
+  const lookCurve = new THREE.CatmullRomCurve3(lookPoints, false, "centripetal");
+  posCurve.getLength();
+  lookCurve.getLength();
+  return { posCurve, lookCurve };
+}
+
+function RabbitFlyover({
+  targetPlazaIndex,
+  plazas,
+  onEnd,
+}: {
+  targetPlazaIndex: number;
+  plazas: CityPlaza[];
+  onEnd: () => void;
+}) {
+  const { camera } = useThree();
+  const elapsed = useRef(0);
+  const ended = useRef(false);
+
+  const plaza = plazas[targetPlazaIndex];
+  const plazaX = plaza?.position[0] ?? 0;
+  const plazaZ = plaza?.position[2] ?? 0;
+
+  const { posCurve, lookCurve } = useMemo(
+    () => buildRabbitCurves(plazaX, plazaZ),
+    [plazaX, plazaZ]
+  );
+
+  // Seed the camera from the curve's own start (WP0) so frame 0 matches
+  // frame 1 exactly. Previously this hardcoded the mirror corner
+  // (-800,700,-1000) while the curve began at (800,700,1000), so the very
+  // first frame teleported the camera across the city — the "buggy" jump.
+  useEffect(() => {
+    posCurve.getPointAt(0, _rabbitPos);
+    lookCurve.getPointAt(0, _rabbitLook);
+    camera.position.copy(_rabbitPos);
+    camera.lookAt(_rabbitLook);
+  }, [camera, posCurve, lookCurve]);
+
+  useFrame((_, delta) => {
+    if (ended.current) return;
+    elapsed.current += delta;
+
+    const rawT = Math.min(elapsed.current / RABBIT_FLYOVER_DURATION, 1);
+    const t = introEase(rawT);
+
+    posCurve.getPointAt(t, _rabbitPos);
+    lookCurve.getPointAt(t, _rabbitLook);
+
+    camera.position.copy(_rabbitPos);
+    camera.lookAt(_rabbitLook);
+
+    if (elapsed.current >= RABBIT_FLYOVER_DURATION && !ended.current) {
+      ended.current = true;
+      onEnd();
+    }
+  });
+
+  return null;
+}
+
+// Explore camera limits: tilt up to ~86° close up, flattening to ~20° from
+// high up; once the player takes the camera, nothing auto-rotates it again.
+const MAX_TILT = Math.PI / 2.1;
+const MIN_TILT_FAR = 0.35;
+const mapNav = { userMoved: false };
+
+// ─── Camera Focus (controls OrbitControls target) ───────────
+
+function CameraFocus({
+  buildings,
+  focusedBuilding,
+  focusedBuildingB,
+  controlsRef,
+  focusPosition,
+}: {
+  buildings: CityBuilding[];
+  focusedBuilding: string | null;
+  focusedBuildingB?: string | null;
+  controlsRef: React.RefObject<any>;
+  focusPosition?: [number, number, number] | null;
+}) {
+  const { camera } = useThree();
+  const startPos = useRef(new THREE.Vector3());
+  const startLook = useRef(new THREE.Vector3());
+  const endPos = useRef(new THREE.Vector3());
+  const endLook = useRef(new THREE.Vector3());
+  const progress = useRef(1);
+  const active = useRef(false);
+
+  // Use ref for buildings to avoid re-triggering animation on array changes
+  const buildingsRef = useRef(buildings);
+  buildingsRef.current = buildings;
+
+  useEffect(() => {
+    if (!focusedBuilding && !focusPosition) {
+      // Re-enable auto-rotate when focus is cleared (unless the player has taken the camera)
+      if (controlsRef.current && !mapNav.userMoved) {
+        controlsRef.current.autoRotate = true;
+      }
+      return;
+    }
+    if (!focusedBuilding) return; // focusPosition is handled by its own useEffect
+
+    const bA = buildingsRef.current.find(
+      (b) => b.login.toLowerCase() === focusedBuilding.toLowerCase()
+    );
+    if (!bA) return;
+
+    // Capture current camera state as start
+    startPos.current.copy(camera.position);
+    if (controlsRef.current) {
+      startLook.current.copy(controlsRef.current.target);
+    }
+
+    // Dual focus: compute midpoint + separation-based backoff
+    const bB = focusedBuildingB
+      ? buildingsRef.current.find((b) => b.login.toLowerCase() === focusedBuildingB.toLowerCase())
+      : null;
+
+    if (bB) {
+      const midX = (bA.position[0] + bB.position[0]) / 2;
+      const midZ = (bA.position[2] + bB.position[2]) / 2;
+      const midY = (bA.height + bB.height) / 2 + 15;
+      const dx = bB.position[0] - bA.position[0];
+      const dz = bB.position[2] - bA.position[2];
+      const separation = Math.sqrt(dx * dx + dz * dz);
+
+      // On mobile, compensate for the bottom sheet covering ~45vh
+      const isMobile = window.innerWidth < 640;
+      const backoff = isMobile
+        ? Math.max(500, separation * 2.8)
+        : Math.max(400, separation * 2.2);
+      const lookYOffset = isMobile ? 35 : 0;
+
+      // Camera perpendicular to the A->B line so buildings land on opposite screen sides
+      // When buildings are very close, use a default direction instead of unstable perpendicular
+      let perpX: number, perpZ: number;
+      if (separation < 5) {
+        perpX = 0.707;
+        perpZ = 0.707;
+      } else {
+        perpX = -dz / separation;
+        perpZ = dx / separation;
+      }
+
+      endLook.current.set(midX, midY + lookYOffset, midZ);
+      endPos.current.set(
+        midX + perpX * backoff,
+        midY + lookYOffset + backoff * 0.45,
+        midZ + perpZ * backoff
+      );
+    } else {
+      // On mobile, shift lookAt target down so building appears above the bottom sheet,
+      // and pull camera further back to show more of the building
+      const isMobile = window.innerWidth < 640;
+      const mobileOffset = isMobile ? 60 : 0;
+      const dist = isMobile ? 300 : 180;
+      const camHeight = isMobile ? 200 : 120;
+
+      // Camera goes to the outside of the building (away from center) so it looks
+      // at the front face without other buildings blocking the view
+      const bx = bA.position[0], bz = bA.position[2];
+      const bLen = Math.sqrt(bx * bx + bz * bz) || 1;
+      endPos.current.set(
+        bx + (bx / bLen) * dist,
+        bA.height + camHeight,
+        bz + (bz / bLen) * dist
+      );
+      endLook.current.set(
+        bx,
+        Math.max(0, bA.height + 15 - mobileOffset),
+        bz
+      );
+    }
+
+    progress.current = 0;
+    active.current = true;
+
+    if (controlsRef.current) {
+      controlsRef.current.autoRotate = false;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusedBuilding, focusedBuildingB, camera, controlsRef]);
+
+  // Focus on a fixed position (sponsored landmarks)
+  useEffect(() => {
+    if (!focusPosition || focusedBuilding) return;
+
+    startPos.current.copy(camera.position);
+    if (controlsRef.current) {
+      startLook.current.copy(controlsRef.current.target);
+    }
+
+    const [px, py, pz] = focusPosition;
+    const isMobile = window.innerWidth < 640;
+    const dist = isMobile ? 400 : 280;
+    const camH = isMobile ? 300 : 220;
+    const mobileOffset = isMobile ? 60 : 0;
+
+    // Position camera OUTSIDE the building looking INWARD (toward center)
+    // so the front face (with text) is visible
+    const len = Math.sqrt(px * px + pz * pz) || 1;
+    endPos.current.set(px + (px / len) * dist, py + camH, pz + (pz / len) * dist);
+    endLook.current.set(px, Math.max(0, py - mobileOffset), pz);
+
+    progress.current = 0;
+    active.current = true;
+
+    if (controlsRef.current) {
+      controlsRef.current.autoRotate = false;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusPosition, camera, controlsRef]);
+
+  useFrame((_, delta) => {
+    if (!active.current || progress.current >= 1) return;
+
+    progress.current = Math.min(1, progress.current + delta * 0.7);
+    // Ease-out cubic
+    const t = 1 - Math.pow(1 - progress.current, 3);
+
+    // Direct A→B interpolation
+    camera.position.lerpVectors(startPos.current, endPos.current, t);
+
+    if (controlsRef.current) {
+      controlsRef.current.target.lerpVectors(startLook.current, endLook.current, t);
+      controlsRef.current.update();
+    }
+
+    if (progress.current >= 1) {
+      active.current = false;
+    }
+  });
+
+  return null;
+}
+
+// ─── Mouse-Driven Flight ─────────────────────────────────────
+
+const DEFAULT_FLY_SPEED = 55;
+// Throttle model (War Thunder, Flight Simulator, GTA planes): the scroll wheel
+// moves the throttle and the speed stays where you leave it, from a hover (0)
+// up to cruise x FLY_TUNE.boost; Shift boosts and Alt/Q brakes on top while
+// held. Wheel changes are proportional so they feel the same slow or fast.
+const HOVER_BELOW = 8; // under this, lowering the throttle settles into a hover
+const MIN_ALT = 25;
+const MAX_ALT = 900;
+// Boost, easing, camera arm and lens live in FLY_TUNE (FlyTune.tsx, ?tune=1).
+// Speed reads through the lens, not the camera distance: the field of view
+// widens with speed (arcade flight / racing convention) plus a slight shake.
+const BASE_FOV = 55;
+// Projectile speed every client uses (ProjectileSwarm, BossEvent, BossMinions).
+const PROJECTILE_BASE_SPEED = 1200;
+// Sky coins spawn within this distance of downtown.
+const COIN_RADIUS = 8000;
+
+function smoothstep(a: number, b: number, v: number): number {
+  const t = Math.max(0, Math.min(1, (v - a) / (b - a)));
+  return t * t * (3 - 2 * t);
+}
+const TURN_RATE = 2.0;
+const CLIMB_RATE = 55;
+const MAX_BANK = 0.55;
+const MAX_PITCH = 0.7;
+const DEADZONE = 0.08;
+const FREE_CAM_BASE_SPEED = 100;
+
+function deadzoneCurve(v: number): number {
+  const abs = Math.abs(v);
+  if (abs < DEADZONE) return 0;
+  const adjusted = (abs - DEADZONE) / (1 - DEADZONE);
+  return Math.sign(v) * adjusted * adjusted;
+}
+
+// Pre-allocated temp vectors to avoid GC pressure in useFrame
+const _fwd = new THREE.Vector3();
+const _right = new THREE.Vector3();
+const _lookTarget = new THREE.Vector3();
+const _blendedPos = new THREE.Vector3();
+const _yAxis = new THREE.Vector3(0, 1, 0);
+
+function VehicleFlight({ onExit, onHud, onPause, pauseSignal = 0, hasOverlay = false, startPaused = false, vehicleType = "airplane", posRef, cityRadius = 3500, isMobile = false, onJoystickState, boostActive = false, brakeActive = false, onFlyMove, onShoot, canShoot = false, pendingRespawnRef, selfStateRef }: { onExit: () => void; onHud: (s: number, a: number, x: number, z: number, yaw: number) => void; onPause: (paused: boolean) => void; pauseSignal?: number; hasOverlay?: boolean; startPaused?: boolean; vehicleType?: string; posRef?: React.MutableRefObject<THREE.Vector3>; cityRadius?: number; isMobile?: boolean; onJoystickState?: (state: { baseX: number; baseY: number; dx: number; dy: number } | null) => void; boostActive?: boolean; brakeActive?: boolean; onFlyMove?: (x: number, y: number, z: number, yaw: number, bank: number) => void; onShoot?: (x: number, y: number, z: number, dirX: number, dirY: number, dirZ: number) => void; canShoot?: boolean; pendingRespawnRef?: React.MutableRefObject<PendingRespawn | null>; selfStateRef?: React.MutableRefObject<SelfPvpState> }) {
+  const { camera } = useThree();
+  const ref = useRef<THREE.Group>(null);
+  const orbitRef = useRef<any>(null);
+
+  const mouse = useRef({ x: 0, y: 0 });
+  const keys = useRef<Record<string, boolean>>({});
+  const [isPaused, setIsPaused] = useState(startPaused);
+  const paused = useRef(startPaused);
+  const isFirstResume = useRef(startPaused); // skip transition on first resume from startPaused
+
+  // Flight state
+  const yaw = useRef(0);
+  const pos = useRef(new THREE.Vector3(0, 120, 400));
+  const flySpeed = useRef(DEFAULT_FLY_SPEED);
+  const bank = useRef(0);
+  const pitch = useRef(0);
+  const curSpeed = useRef(DEFAULT_FLY_SPEED);
+  const yawRate = useRef(0);
+  const climbRate = useRef(0);
+  const camYaw = useRef<number | null>(null);
+  const camY = useRef<number | null>(null);
+  // The boost widens the lens; leaving flight hands the camera back at its base field of view.
+  useEffect(() => () => {
+    const persp = camera as THREE.PerspectiveCamera;
+    persp.fov = BASE_FOV;
+    persp.updateProjectionMatrix();
+  }, [camera]);
+
+  // Camera smoothing
+  const camPos = useRef(new THREE.Vector3(0, 140, 450));
+  const camLook = useRef(new THREE.Vector3(0, 120, 400));
+
+  // Last applied respawn timestamp — used to detect a NEW respawn signal
+  // from the PartyKit server and teleport the local vehicle accordingly.
+  const lastAppliedRespawnAt = useRef(0);
+
+  // Transition state
+  const transitionProgress = useRef(1);
+  const transitionFrom = useRef(new THREE.Vector3());
+  const transitionTo = useRef(new THREE.Vector3());
+  const transitionLookFrom = useRef(new THREE.Vector3());
+  const transitionLookTo = useRef(new THREE.Vector3());
+  const wasJustUnpaused = useRef(false);
+
+  // Contrail / speed trail
+  const TRAIL_POINTS = 48;
+  const trailPositions = useRef(new Float32Array(TRAIL_POINTS * 3));
+  const trailColors = useRef(new Float32Array(TRAIL_POINTS * 4));
+  const trailGeomRef = useRef<THREE.BufferGeometry>(null);
+  const trailInit = useRef(false);
+
+  const hudTimer = useRef(0);
+  const lastHudSpeed = useRef(-1);
+  const lastHudAlt = useRef(-1);
+
+  // Initialize flight from current camera position and direction
+  useEffect(() => {
+    const camDir = new THREE.Vector3();
+    camera.getWorldDirection(camDir);
+
+    // Derive yaw from camera look direction (projected onto XZ plane)
+    const initialYaw = Math.atan2(-camDir.x, -camDir.z);
+    yaw.current = initialYaw;
+
+    // Place vehicle ahead of camera in the look direction
+    const startPos = camera.position.clone();
+    // Clamp altitude to flight range
+    startPos.y = Math.max(MIN_ALT, Math.min(MAX_ALT, startPos.y));
+    pos.current.copy(startPos);
+
+    // Camera follow position: behind and above the vehicle
+    const behindOffset = new THREE.Vector3(
+      Math.sin(initialYaw) * 50,
+      20,
+      Math.cos(initialYaw) * 50
+    );
+    camPos.current.copy(startPos).add(behindOffset);
+    camLook.current.copy(startPos);
+
+    camera.position.copy(camPos.current);
+    camera.lookAt(camLook.current);
+    if (startPaused) onPause(true);
+  }, [camera]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Touch joystick refs
+  const joystickTouch = useRef<{ id: number; startX: number; startY: number } | null>(null);
+  const pendingTouch = useRef<{ dx: number; dy: number } | null>(null);
+  const JOYSTICK_MAX_RADIUS = 60;
+
+  // Mouse + touch tracking for flight steering
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      if (!paused.current) {
+        mouse.current.x = (e.clientX / window.innerWidth) * 2 - 1;
+        mouse.current.y = -((e.clientY / window.innerHeight) * 2 - 1);
+      }
+    };
+    // Scroll wheel is the throttle: each notch (deltaY ~100) scales speed by
+    // ~1.35, so cruise to top speed is ~10 notches; scrolling down past
+    // HOVER_BELOW settles into a hover.
+    const onWheel = (e: WheelEvent) => {
+      if (paused.current) return;
+      if ((e.target as HTMLElement | null)?.closest?.("button, a, input, [data-ui]")) return;
+      const maxSpeed = DEFAULT_FLY_SPEED * FLY_TUNE.boost;
+      const factor = Math.exp(-e.deltaY * FLY_TUNE.wheelStep / 100);
+      if (factor > 1) flySpeed.current = Math.min(maxSpeed, Math.max(HOVER_BELOW, flySpeed.current) * factor);
+      else flySpeed.current = flySpeed.current * factor < HOVER_BELOW ? 0 : flySpeed.current * factor;
+    };
+
+    // Touch handlers for mobile joystick
+    const onTouchStart = (e: TouchEvent) => {
+      if (paused.current || joystickTouch.current) return;
+      const t = e.changedTouches[0];
+      joystickTouch.current = { id: t.identifier, startX: t.clientX, startY: t.clientY };
+      onJoystickState?.({ baseX: t.clientX, baseY: t.clientY, dx: 0, dy: 0 });
+    };
+    const onTouchMove = (e: TouchEvent) => {
+      if (!joystickTouch.current || paused.current) return;
+      for (let i = 0; i < e.changedTouches.length; i++) {
+        const t = e.changedTouches[i];
+        if (t.identifier !== joystickTouch.current.id) continue;
+        const rawDx = t.clientX - joystickTouch.current.startX;
+        const rawDy = t.clientY - joystickTouch.current.startY;
+        // Follow behavior: recenter when finger exceeds radius
+        const dist = Math.sqrt(rawDx ** 2 + rawDy ** 2);
+        if (dist > JOYSTICK_MAX_RADIUS) {
+          const angle = Math.atan2(rawDy, rawDx);
+          joystickTouch.current.startX = t.clientX - Math.cos(angle) * JOYSTICK_MAX_RADIUS;
+          joystickTouch.current.startY = t.clientY - Math.sin(angle) * JOYSTICK_MAX_RADIUS;
+        }
+        const dx = t.clientX - joystickTouch.current.startX;
+        const dy = t.clientY - joystickTouch.current.startY;
+        pendingTouch.current = { dx, dy };
+        onJoystickState?.({ baseX: joystickTouch.current.startX, baseY: joystickTouch.current.startY, dx, dy });
+      }
+    };
+    const onTouchEnd = (e: TouchEvent) => {
+      for (let i = 0; i < e.changedTouches.length; i++) {
+        if (joystickTouch.current?.id === e.changedTouches[i].identifier) {
+          joystickTouch.current = null;
+          pendingTouch.current = null;
+          mouse.current.x = 0;
+          mouse.current.y = 0;
+          onJoystickState?.(null);
+        }
+      }
+    };
+
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("wheel", onWheel, { passive: true });
+
+    // Touch: start on canvas element, move/end on window to catch finger leaving canvas
+    const canvas = document.querySelector("canvas");
+    if (isMobile && canvas) {
+      canvas.style.touchAction = "none";
+      canvas.addEventListener("touchstart", onTouchStart, { passive: true });
+      window.addEventListener("touchmove", onTouchMove, { passive: true });
+      window.addEventListener("touchend", onTouchEnd, { passive: true });
+      window.addEventListener("touchcancel", onTouchEnd, { passive: true });
+    }
+
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("wheel", onWheel);
+      if (canvas) {
+        canvas.removeEventListener("touchstart", onTouchStart);
+      }
+      window.removeEventListener("touchmove", onTouchMove);
+      window.removeEventListener("touchend", onTouchEnd);
+      window.removeEventListener("touchcancel", onTouchEnd);
+    };
+  }, [isMobile]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // External pause (triggered by parent, e.g. building click)
+  const prevSignal = useRef(pauseSignal);
+  useEffect(() => {
+    if (pauseSignal !== prevSignal.current) {
+      prevSignal.current = pauseSignal;
+      if (!paused.current) {
+        paused.current = true;
+        setIsPaused(true);
+        onPause(true);
+      }
+    }
+  }, [pauseSignal, onPause]);
+
+  // Auto-pause when an overlay opens, auto-resume when it closes.
+  // useEffectEvent gives a stable identity that always reads the latest onPause
+  // without adding it to the effect's dependency array.
+  const notifyPause = useEffectEvent((p: boolean) => onPause(p));
+  useEffect(() => {
+    if (hasOverlay) {
+      if (!paused.current) {
+        paused.current = true;
+        setIsPaused(true);
+        notifyPause(true);
+      }
+    } else {
+      if (paused.current) {
+        paused.current = false;
+        setIsPaused(false);
+        wasJustUnpaused.current = true;
+        transitionProgress.current = 0;
+        transitionFrom.current.copy(camera.position);
+        transitionLookFrom.current.copy(camLook.current);
+        notifyPause(false);
+      }
+    }
+  }, [hasOverlay]);
+
+  // Keyboard
+  const hasOverlayRef = useRef(hasOverlay);
+  hasOverlayRef.current = hasOverlay;
+
+  useEffect(() => {
+    const doPause = () => {
+      if (paused.current) return;
+      paused.current = true;
+      setIsPaused(true);
+      onPause(true);
+    };
+
+    const doResume = () => {
+      if (!paused.current) return;
+      paused.current = false;
+      setIsPaused(false);
+      // Skip camera transition on first resume from startPaused — camera is already behind the plane
+      if (isFirstResume.current) {
+        isFirstResume.current = false;
+        transitionProgress.current = 1;
+        wasJustUnpaused.current = false;
+      } else {
+        wasJustUnpaused.current = true;
+        transitionProgress.current = 0;
+        transitionFrom.current.copy(camera.position);
+        transitionLookFrom.current.copy(camLook.current);
+      }
+      onPause(false);
+    };
+
+    const FLIGHT_KEYS = new Set(["KeyW", "KeyA", "KeyS", "KeyD", "KeyQ", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "ShiftLeft", "ShiftRight", "AltLeft", "AltRight"]);
+
+    const down = (e: KeyboardEvent) => {
+      keys.current[e.code] = true;
+      // Alt lowers the throttle; on Windows its default would focus the browser menu.
+      if (e.code === "AltLeft" || e.code === "AltRight") e.preventDefault();
+      if (e.code === "Escape") {
+        if (!paused.current) {
+          // Flying → pause
+          doPause();
+        } else if (hasOverlayRef.current) {
+          // Paused + overlay showing → let page.tsx close it
+          return;
+        } else {
+          // Paused + no overlay → exit fly mode
+          onExit();
+        }
+      } else if (e.code === "KeyP" || e.code === "Space") {
+        e.preventDefault();
+        if (paused.current) doResume();
+        else doPause();
+      } else if (e.code === "KeyR") {
+        if (!paused.current) {
+          // Return to City
+          yaw.current = Math.atan2(pos.current.x, pos.current.z);
+        }
+      } else if (paused.current && FLIGHT_KEYS.has(e.code)) {
+        // Any flight key while paused → resume flying
+        doResume();
+      }
+    };
+    const up = (e: KeyboardEvent) => { keys.current[e.code] = false; };
+    window.addEventListener("keydown", down);
+    window.addEventListener("keyup", up);
+    return () => {
+      window.removeEventListener("keydown", down);
+      window.removeEventListener("keyup", up);
+    };
+  }, [camera, onExit, onPause]);
+
+  // ─── PvP shoot input (mouse click + F key, autofire while held) ─
+  // canShoot is read through a ref so toggling it never tears down the
+  // listeners (that was making the gun "stop firing" after pause/resume).
+  const canShootRef = useRef(canShoot);
+  canShootRef.current = canShoot;
+  const onShootRef = useRef(onShoot);
+  onShootRef.current = onShoot;
+  useEffect(() => {
+    const SHOT_COOLDOWN_MS = 150; // ~6.6 shots/sec; server caps at 7/s
+    const lastShotRef = { current: 0 };
+    let mouseDown = false;
+    let keyDown = false;
+    let intervalId: number | null = null;
+
+    const fire = () => {
+      if (paused.current) return;
+      if (!canShootRef.current) return;
+      const handler = onShootRef.current;
+      if (!handler) return;
+      const now = Date.now();
+      if (now - lastShotRef.current < SHOT_COOLDOWN_MS) return;
+      lastShotRef.current = now;
+      const cosP = Math.cos(pitch.current);
+      const dirX = -Math.sin(yaw.current) * cosP;
+      const dirY = Math.sin(pitch.current);
+      const dirZ = -Math.cos(yaw.current) * cosP;
+      const spawnX = pos.current.x + dirX * 30;
+      const spawnY = pos.current.y + dirY * 30;
+      const spawnZ = pos.current.z + dirZ * 30;
+      // Shots inherit the plane's speed: every client moves a projectile at
+      // dir * 1200 u/s, so scaling dir adds the plane's velocity and a shot
+      // fired at boost speed still leaves ahead of the nose.
+      const inherit = 1 + curSpeed.current / PROJECTILE_BASE_SPEED;
+      handler(spawnX, spawnY, spawnZ, dirX * inherit, dirY * inherit, dirZ * inherit);
+    };
+
+    const startAutofire = () => {
+      fire(); // immediate first shot
+      if (intervalId !== null) return;
+      intervalId = window.setInterval(() => {
+        if (!mouseDown && !keyDown) {
+          if (intervalId !== null) {
+            clearInterval(intervalId);
+            intervalId = null;
+          }
+          return;
+        }
+        fire();
+      }, SHOT_COOLDOWN_MS);
+    };
+
+    const onMouseDown = (e: MouseEvent) => {
+      const t = e.target as HTMLElement;
+      if (t && t.closest("button, a, input, [data-ui]")) return;
+      if (e.button !== 0) return;
+      mouseDown = true;
+      startAutofire();
+    };
+    const onMouseUp = () => {
+      mouseDown = false;
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code !== "KeyF") return;
+      if (e.repeat) return; // ignore native key-repeat, our interval drives autofire
+      keyDown = true;
+      startAutofire();
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.code === "KeyF") keyDown = false;
+    };
+    // If the window loses focus, stop holding so we don't autofire forever.
+    const onBlur = () => {
+      mouseDown = false;
+      keyDown = false;
+    };
+
+    window.addEventListener("mousedown", onMouseDown);
+    window.addEventListener("mouseup", onMouseUp);
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      if (intervalId !== null) clearInterval(intervalId);
+      window.removeEventListener("mousedown", onMouseDown);
+      window.removeEventListener("mouseup", onMouseUp);
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onBlur);
+    };
+  }, []);
+
+  useFrame((state, delta) => {
+    const dt = Math.min(delta, 0.05);
+    const k = keys.current;
+
+    if (paused.current) {
+      // ── PAUSED: OrbitControls handles camera ──
+      if (ref.current) ref.current.visible = true;
+
+      // Keep orbit target on the plane
+      if (orbitRef.current) {
+        orbitRef.current.target.copy(pos.current);
+        orbitRef.current.update();
+      }
+
+      hudTimer.current += dt;
+      if (hudTimer.current > 0.25) {
+        hudTimer.current = 0;
+        lastHudSpeed.current = 0;
+        lastHudAlt.current = Math.round(pos.current.y);
+        onHud(0, pos.current.y, pos.current.x, pos.current.z, yaw.current);
+      }
+      return;
+    }
+
+    // ── Unpause transition ──
+    if (wasJustUnpaused.current) {
+      if (ref.current) ref.current.visible = true;
+      transitionProgress.current += dt * 2; // 0.5s transition
+      if (transitionProgress.current >= 1) {
+        transitionProgress.current = 1;
+        wasJustUnpaused.current = false;
+      }
+    }
+
+    // ── FLIGHT MODE ──
+    // Consume pending touch input (mobile joystick -> mouse)
+    if (pendingTouch.current) {
+      const { dx, dy } = pendingTouch.current;
+      mouse.current.x = Math.max(-1, Math.min(1, dx / JOYSTICK_MAX_RADIUS));
+      mouse.current.y = Math.max(-1, Math.min(1, -dy / JOYSTICK_MAX_RADIUS));
+      pendingTouch.current = null;
+    }
+
+    const t = state.clock.elapsedTime;
+    const mx = mouse.current.x;
+    const my = mouse.current.y;
+
+    let turnInput = deadzoneCurve(mx);
+    if (k["KeyA"] || k["ArrowLeft"]) turnInput = -1;
+    if (k["KeyD"] || k["ArrowRight"]) turnInput = 1;
+
+    // Turning ramps in and out instead of snapping to full rate.
+    yawRate.current += (turnInput * TURN_RATE - yawRate.current) * (1 - Math.exp(-FLY_TUNE.turnEase * dt));
+    yaw.current -= yawRate.current * dt;
+
+    let altInput = deadzoneCurve(my);
+    if (k["KeyW"] || k["ArrowUp"]) altInput = 1;
+    if (k["KeyS"] || k["ArrowDown"]) altInput = -1;
+
+    // Throttle (scroll wheel) sets the base speed, which stays put. On top of it,
+    // Shift held boosts and Alt/Q held brakes (mobile: boost/brake buttons),
+    // both easing back to the throttle on release (Ace Combat over War Thunder).
+    const boosting = k["ShiftLeft"] || k["ShiftRight"] || boostActive;
+    const braking = k["AltLeft"] || k["AltRight"] || k["KeyQ"] || brakeActive;
+    const targetSpeed = flySpeed.current * (braking ? 0.3 : boosting ? FLY_TUNE.shiftBoost : 1);
+    const ease = targetSpeed > curSpeed.current ? FLY_TUNE.speedEase : FLY_TUNE.speedEase * 1.6;
+    curSpeed.current += (targetSpeed - curSpeed.current) * (1 - Math.exp(-ease * dt));
+    const actualSpeed = curSpeed.current;
+
+    // Climb grows slower than speed (sqrt) and ramps in and out; a hovering
+    // plane still climbs and dives, at a floor rate.
+    const climbTarget = altInput * CLIMB_RATE * Math.max(0.6, Math.sqrt(actualSpeed / DEFAULT_FLY_SPEED));
+    climbRate.current += (climbTarget - climbRate.current) * (1 - Math.exp(-FLY_TUNE.climbEase * dt));
+    pos.current.y += climbRate.current * dt;
+    if (pos.current.y <= MIN_ALT || pos.current.y >= MAX_ALT) climbRate.current = 0;
+    pos.current.y = Math.max(MIN_ALT, Math.min(MAX_ALT, pos.current.y));
+
+    _fwd.set(-Math.sin(yaw.current), 0, -Math.cos(yaw.current));
+    pos.current.addScaledVector(_fwd, actualSpeed * dt);
+
+    // Soft / Hard boundary for X/Z dynamically based on city size
+    const MAX_RADIUS = Math.max(3500, cityRadius * 1.3);
+    const SOFT_RADIUS = MAX_RADIUS * 0.85;
+    const distSq = pos.current.x * pos.current.x + pos.current.z * pos.current.z;
+    if (distSq > SOFT_RADIUS * SOFT_RADIUS) {
+      const dist = Math.sqrt(distSq);
+      if (dist > SOFT_RADIUS) {
+        const excess = dist - SOFT_RADIUS;
+        const pullFactor = Math.min(excess / (MAX_RADIUS - SOFT_RADIUS), 1.0);
+        const pullMag = actualSpeed * dt * pullFactor * 1.5;
+        pos.current.x -= (pos.current.x / dist) * pullMag;
+        pos.current.z -= (pos.current.z / dist) * pullMag;
+
+        const newDistSq = pos.current.x * pos.current.x + pos.current.z * pos.current.z;
+        if (newDistSq > MAX_RADIUS * MAX_RADIUS) {
+          const newDist = Math.sqrt(newDistSq);
+          pos.current.x = (pos.current.x / newDist) * MAX_RADIUS;
+          pos.current.z = (pos.current.z / newDist) * MAX_RADIUS;
+        }
+      }
+    }
+
+    if (posRef) posRef.current.copy(pos.current);
+
+    // Apply pending respawn teleport (server-issued after a kill).
+    // We compare timestamps so we only teleport once per respawn event.
+    if (pendingRespawnRef?.current && pendingRespawnRef.current.at > lastAppliedRespawnAt.current) {
+      const r = pendingRespawnRef.current;
+      pos.current.set(r.x, r.y, r.z);
+      lastAppliedRespawnAt.current = r.at;
+    }
+
+    // Broadcast position to multiplayer presence (throttled internally)
+    onFlyMove?.(pos.current.x, pos.current.y, pos.current.z, yaw.current, bank.current);
+
+    const targetBank = -(yawRate.current / TURN_RATE) * MAX_BANK;
+    bank.current += (targetBank - bank.current) * 5 * dt;
+
+    const targetPitch = altInput * MAX_PITCH;
+    pitch.current += (targetPitch - pitch.current) * 6 * dt;
+
+    if (ref.current) {
+      // Hide the vehicle while downed — gives feedback that you actually
+      // died and prevents observers from seeing a ghost ship floating.
+      const downed = selfStateRef && selfStateRef.current.downedUntil > Date.now();
+      ref.current.visible = !downed;
+      if (!downed) {
+        ref.current.position.copy(pos.current);
+        ref.current.rotation.set(pitch.current, yaw.current, bank.current, "YXZ");
+      }
+    }
+
+    // Camera arm: a fixed distance behind the plane, swinging in behind turns
+    // and following climbs with a lag. Only its angle and height are smoothed,
+    // never its position, so the lag doesn't grow with speed and the camera
+    // can't overshoot the plane.
+    // Lens + shake track how far above the throttle speed the boost has pushed you.
+    const speedK = smoothstep(1.15, Math.max(1.2, FLY_TUNE.shiftBoost), actualSpeed / Math.max(HOVER_BELOW, flySpeed.current));
+    if (camYaw.current === null) camYaw.current = yaw.current;
+    if (camY.current === null) camY.current = camPos.current.y;
+    let dYaw = yaw.current - camYaw.current;
+    dYaw = Math.atan2(Math.sin(dYaw), Math.cos(dYaw));
+    camYaw.current += dYaw * (1 - Math.exp(-FLY_TUNE.camYawLag * dt));
+    camY.current += (pos.current.y + FLY_TUNE.camHeight - camY.current) * (1 - Math.exp(-FLY_TUNE.camHeightLag * dt));
+    const arm = FLY_TUNE.camDist * (1 + 0.12 * speedK);
+    camPos.current.set(
+      pos.current.x + Math.sin(camYaw.current) * arm,
+      camY.current,
+      pos.current.z + Math.cos(camYaw.current) * arm,
+    );
+    camLook.current.copy(pos.current).addScaledVector(_fwd, 8);
+    camLook.current.y += 2;
+
+    // Apply transition blend if coming back from free-cam
+    if (wasJustUnpaused.current && transitionProgress.current < 1) {
+      const tEase = 1 - Math.pow(1 - transitionProgress.current, 3);
+      _blendedPos.copy(transitionFrom.current).lerp(camPos.current, tEase);
+      camera.position.copy(_blendedPos);
+    } else {
+      camera.position.copy(camPos.current);
+    }
+    camera.lookAt(camLook.current);
+
+    // Sense of speed: wider lens and a faint shake as boost builds.
+    const persp = camera as THREE.PerspectiveCamera;
+    const fov = BASE_FOV + FLY_TUNE.fovKick * speedK;
+    if (Math.abs(persp.fov - fov) > 0.05) { persp.fov = fov; persp.updateProjectionMatrix(); }
+    if (speedK > 0.05) {
+      const t = state.clock.elapsedTime;
+      const amp = 0.35 * speedK;
+      camera.position.x += Math.sin(t * 37.1) * amp;
+      camera.position.y += Math.sin(t * 41.3 + 1.7) * amp * 0.7;
+    }
+
+    // Update trail
+    if (!trailInit.current) {
+      for (let i = 0; i < TRAIL_POINTS; i++) {
+        trailPositions.current[i * 3] = pos.current.x;
+        trailPositions.current[i * 3 + 1] = pos.current.y;
+        trailPositions.current[i * 3 + 2] = pos.current.z;
+        trailColors.current[i * 4] = 1;
+        trailColors.current[i * 4 + 1] = 1;
+        trailColors.current[i * 4 + 2] = 1;
+        trailColors.current[i * 4 + 3] = 0;
+      }
+      trailInit.current = true;
+    } else {
+      trailPositions.current.copyWithin(3, 0, (TRAIL_POINTS - 1) * 3);
+      trailPositions.current[0] = pos.current.x - _fwd.x * 5; // trails slightly behind the nose
+      trailPositions.current[1] = pos.current.y;
+      trailPositions.current[2] = pos.current.z - _fwd.z * 5;
+    }
+
+    const speedRatio = actualSpeed / DEFAULT_FLY_SPEED;
+    for (let i = 0; i < TRAIL_POINTS; i++) {
+      const fade = 1 - (i / TRAIL_POINTS);
+      // Only show trail when boosting (speedRatio > 1) or fast
+      const intensity = Math.max(0, Math.min(1.0, (speedRatio - 0.7) * 1.5));
+      trailColors.current[i * 4 + 3] = fade * intensity * 0.5; // max 50% opacity
+    }
+
+    if (trailGeomRef.current) {
+      trailGeomRef.current.attributes.position.needsUpdate = true;
+      trailGeomRef.current.attributes.color.needsUpdate = true;
+    }
+
+    hudTimer.current += dt;
+    if (hudTimer.current > 0.25) {
+      hudTimer.current = 0;
+      lastHudSpeed.current = Math.round(actualSpeed);
+      lastHudAlt.current = Math.round(pos.current.y);
+      onHud(actualSpeed, pos.current.y, pos.current.x, pos.current.z, yaw.current);
+    }
+  });
+
+  return (
+    <>
+      <line>
+        <bufferGeometry ref={trailGeomRef}>
+          <bufferAttribute attach="attributes-position" args={[trailPositions.current, 3]} count={TRAIL_POINTS} />
+          <bufferAttribute attach="attributes-color" args={[trailColors.current, 4]} count={TRAIL_POINTS} />
+        </bufferGeometry>
+        <lineBasicMaterial transparent vertexColors depthWrite={false} blending={THREE.AdditiveBlending} linewidth={2} />
+      </line>
+      <group ref={ref}>
+        <group scale={[4, 4, 4]}>
+          <VehicleMesh type={vehicleType} />
+        </group>
+        <pointLight position={[0, -2, 0]} color="#f0c870" intensity={15} distance={60} />
+        <pointLight position={[0, 3, -4]} color="#ffffff" intensity={5} distance={30} />
+      </group>
+      {isPaused && (
+        <OrbitControls
+          ref={orbitRef}
+          enableDamping
+          dampingFactor={0.06}
+          minDistance={20}
+          maxDistance={300}
+          maxPolarAngle={Math.PI / 2.1}
+          target={pos.current.toArray() as [number, number, number]}
+        />
+      )}
+    </>
+  );
+}
+
+// ─── Sky Collectibles ────────────────────────────────────────
+
+const COLLECTIBLE_COUNT = 40;
+const COMBO_WINDOW = 3; // seconds
+// Hitbox radius per type — generous for good UX at flight speed
+const COLLECT_RADIUS: Record<string, number> = { common: 20, rare: 28, epic: 35 };
+
+interface CollectibleDef {
+  x: number; y: number; z: number;
+  type: "common" | "rare" | "epic";
+  points: number;
+  size: number;
+}
+
+const _cMatrix = new THREE.Matrix4();
+const _cScale = new THREE.Vector3();
+const _cPos = new THREE.Vector3();
+const _cQuat = new THREE.Quaternion();
+const _cEuler = new THREE.Euler();
+
+function SkyCollectibles({ playerPosRef, accentColor, onCollect, cityRadius, sfMap, buildings }: {
+  playerPosRef: React.MutableRefObject<THREE.Vector3>;
+  accentColor: string;
+  onCollect: (score: number, earned: number, combo: number, collected: number, maxCombo: number) => void;
+  cityRadius: number;
+  sfMap?: SFRenderMap | null;
+  buildings: CityBuilding[];
+}) {
+  const meshRef = useRef<THREE.InstancedMesh>(null);
+  const flashRef = useRef<THREE.PointLight>(null);
+
+  // Generate collectible positions. In SF mode the city footprint is irregular
+  // and off-center, so coins are anchored above real buildings (always over
+  // land/streets). Otherwise we fall back to radial zones around the origin.
+  const items = useMemo<CollectibleDef[]>(() => {
+    const now = new Date();
+    const start = new Date(now.getFullYear(), 0, 0);
+    const dayOfYear = Math.floor((now.getTime() - start.getTime()) / 86400000);
+    let seed = dayOfYear * 7919 + now.getFullYear();
+
+    const rng = () => { seed = (seed * 16807) % 2147483647; return (seed - 1) / 2147483646; };
+
+    const result: CollectibleDef[] = [];
+
+    // Tier plan: count + altitude band + scoring per ring (shared by both modes).
+    // Altitudes are absolute — player flies between MIN_ALT(25) and MAX_ALT(900).
+    const TIERS: { count: number; minAlt: number; maxAlt: number; type: "common" | "rare" | "epic"; points: number; size: number }[] = [
+      { count: 10, minAlt: 80, maxAlt: 250, type: "common", points: 1, size: 6 },
+      { count: 12, minAlt: 200, maxAlt: 500, type: "common", points: 1, size: 6 },
+      { count: 4, minAlt: 300, maxAlt: 600, type: "rare", points: 5, size: 9 },
+      { count: 8, minAlt: 250, maxAlt: 550, type: "common", points: 1, size: 6 },
+      { count: 4, minAlt: 400, maxAlt: 700, type: "rare", points: 5, size: 9 },
+      { count: 2, minAlt: 650, maxAlt: 850, type: "epic", points: 25, size: 14 },
+    ];
+
+    // ── SF mode: anchor coins above real buildings, spread across the city ──
+    // Only buildings near downtown: across the whole Bay the coins were too sparse to chase.
+    const coinR = Math.min(cityRadius, COIN_RADIUS);
+    const pool = sfMap ? buildings.filter((b) => b.position[0] ** 2 + b.position[2] ** 2 <= coinR * coinR) : [];
+    if (sfMap && pool.length > 0) {
+      let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+      for (const b of pool) {
+        const x = b.position[0], z = b.position[2];
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (z < minZ) minZ = z;
+        if (z > maxZ) maxZ = z;
+      }
+      const span = Math.max(maxX - minX, maxZ - minZ);
+      const total = TIERS.reduce((s, t) => s + t.count, 0);
+      // Target an even spread: spacing scaled to footprint size vs coin count.
+      const baseSep = (span / Math.sqrt(total)) * 0.7;
+
+      const placed: { x: number; z: number }[] = [];
+      const farEnough = (x: number, z: number, sep: number) =>
+        placed.every(p => (p.x - x) ** 2 + (p.z - z) ** 2 >= sep * sep);
+
+      // Pick a building, relaxing the spacing requirement if the map is crowded.
+      const pickXZ = (): [number, number] => {
+        for (let relax = 0; relax < 6; relax++) {
+          const sep = baseSep * (1 - relax * 0.15);
+          for (let attempt = 0; attempt < 30; attempt++) {
+            const b = pool[Math.floor(rng() * pool.length)];
+            const x = b.position[0] + (rng() - 0.5) * 60;
+            const z = b.position[2] + (rng() - 0.5) * 60;
+            if (farEnough(x, z, sep)) { placed.push({ x, z }); return [x, z]; }
+          }
+        }
+        const b = pool[Math.floor(rng() * pool.length)];
+        const x = b.position[0], z = b.position[2];
+        placed.push({ x, z });
+        return [x, z];
+      };
+
+      for (const tier of TIERS) {
+        for (let i = 0; i < tier.count; i++) {
+          const [x, z] = pickXZ();
+          const y = tier.minAlt + rng() * (tier.maxAlt - tier.minAlt);
+          result.push({ x, y, z, type: tier.type, points: tier.points, size: tier.size });
+        }
+      }
+      return result;
+    }
+
+    // ── Default mode: radial zone distribution around the origin ──
+    const spread = cityRadius * 0.6;
+    const MIN_SPACING = 80;
+
+    // Check minimum distance against all placed items
+    const tooClose = (x: number, y: number, z: number) =>
+      result.some(p => (p.x - x) ** 2 + (p.y - y) ** 2 + (p.z - z) ** 2 < MIN_SPACING ** 2);
+
+    // Place items in angular sectors within a radial zone
+    const placeInZone = (
+      count: number,
+      minR: number, maxR: number,
+      minAlt: number, maxAlt: number,
+      type: "common" | "rare" | "epic",
+      points: number, size: number,
+    ) => {
+      const angularOffset = rng() * Math.PI * 2; // random rotation per zone
+      for (let i = 0; i < count; i++) {
+        const baseAngle = angularOffset + (i / count) * Math.PI * 2;
+        let placed = false;
+        for (let attempt = 0; attempt < 10 && !placed; attempt++) {
+          const angle = baseAngle + (rng() - 0.5) * (Math.PI * 2 / count) * 0.7;
+          const dist = minR + rng() * (maxR - minR);
+          const x = Math.cos(angle) * dist;
+          const z = Math.sin(angle) * dist;
+          const y = minAlt + rng() * (maxAlt - minAlt);
+          if (!tooClose(x, y, z)) {
+            result.push({ x, y, z, type, points, size });
+            placed = true;
+          }
+        }
+        // Fallback: place anyway if all attempts collided
+        if (!placed) {
+          const angle = baseAngle + (rng() - 0.5) * 0.3;
+          const dist = minR + rng() * (maxR - minR);
+          result.push({
+            x: Math.cos(angle) * dist,
+            y: minAlt + rng() * (maxAlt - minAlt),
+            z: Math.sin(angle) * dist,
+            type, points, size,
+          });
+        }
+      }
+    };
+
+    // Inner ring: 10 commons between buildings, low altitude
+    placeInZone(10, spread * 0.2, spread * 0.4, 80, 250, "common", 1, 6);
+    // Mid ring: 12 commons + 4 rares, medium altitude
+    placeInZone(12, spread * 0.4, spread * 0.7, 200, 500, "common", 1, 6);
+    placeInZone(4, spread * 0.4, spread * 0.7, 300, 600, "rare", 5, 9);
+    // Outer ring: 8 commons + 4 rares + 2 epics, high altitude
+    placeInZone(8, spread * 0.7, spread, 250, 550, "common", 1, 6);
+    placeInZone(4, spread * 0.7, spread, 400, 700, "rare", 5, 9);
+    placeInZone(2, spread * 0.7, spread, 650, 850, "epic", 25, 14);
+
+    return result;
+  }, [cityRadius, sfMap, buildings]);
+
+  // Track collected state
+  const collected = useRef(new Uint8Array(COLLECTIBLE_COUNT));
+  const collectedCount = useRef(0);
+  const totalScore = useRef(0);
+  const lastCollectTime = useRef(0);
+  const comboCount = useRef(0);
+  const maxCombo = useRef(1);
+  const flashTimer = useRef(0);
+
+  // HDR colors — values > 1 glow naturally with toneMapped={false}
+  const colors = useMemo(() => ({
+    common: new THREE.Color(0, 2.5, 2.5),   // bright cyan
+    rare: new THREE.Color(2.5, 0.5, 3),     // vivid purple
+    epic: new THREE.Color(3, 2.2, 0),        // bright gold
+  }), []);
+
+  // Set instance colors
+  useEffect(() => {
+    const mesh = meshRef.current;
+    if (!mesh) return;
+    for (let i = 0; i < items.length; i++) {
+      mesh.setColorAt(i, colors[items[i].type]);
+    }
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+  }, [items, colors]);
+
+  const prevTime = useRef(0);
+
+  useFrame((state) => {
+    const mesh = meshRef.current;
+    if (!mesh) return;
+
+    const t = state.clock.elapsedTime;
+    const dt = prevTime.current > 0 ? Math.min(t - prevTime.current, 0.05) : 0.016;
+    prevTime.current = t;
+    const playerPos = playerPosRef.current;
+
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+
+      if (collected.current[i]) {
+        // Hide collected items
+        _cScale.set(0, 0, 0);
+        _cPos.set(item.x, item.y, item.z);
+        _cMatrix.compose(_cPos, _cQuat.identity(), _cScale);
+        mesh.setMatrixAt(i, _cMatrix);
+        continue;
+      }
+
+      // Check collection — hitbox scales with item type
+      const dx = playerPos.x - item.x;
+      const dy = playerPos.y - item.y;
+      const dz = playerPos.z - item.z;
+      const distSq = dx * dx + dy * dy + dz * dz;
+      const radius = COLLECT_RADIUS[item.type];
+
+      if (distSq < radius * radius) {
+        collected.current[i] = 1;
+        collectedCount.current++;
+
+        // Combo logic
+        const now = t;
+        if (now - lastCollectTime.current < COMBO_WINDOW) {
+          comboCount.current++;
+        } else {
+          comboCount.current = 1;
+        }
+        lastCollectTime.current = now;
+
+        const multiplier = comboCount.current >= 4 ? 3 : comboCount.current >= 3 ? 2 : comboCount.current >= 2 ? 1.5 : 1;
+        const multiplierInt = multiplier >= 3 ? 3 : multiplier >= 2 ? 2 : 1;
+        if (multiplierInt > maxCombo.current) maxCombo.current = multiplierInt;
+
+        const earned = Math.round(item.points * multiplier);
+        totalScore.current += earned;
+
+        // Flash effect
+        if (flashRef.current) {
+          flashRef.current.position.set(item.x, item.y, item.z);
+          flashRef.current.intensity = 20;
+          flashTimer.current = 0.3;
+        }
+
+        onCollect(totalScore.current, earned, comboCount.current, collectedCount.current, maxCombo.current);
+
+        // Hide immediately
+        _cScale.set(0, 0, 0);
+        _cPos.set(item.x, item.y, item.z);
+        _cMatrix.compose(_cPos, _cQuat.identity(), _cScale);
+        mesh.setMatrixAt(i, _cMatrix);
+        continue;
+      }
+
+      // Animate: spin around Y + gentle pulse
+      const pulse = 1 + Math.sin(t * 2.5 + i) * 0.2;
+      const s = item.size * pulse;
+      _cEuler.set(0, t * 2.0 + i * 0.7, 0);
+      _cQuat.setFromEuler(_cEuler);
+      _cPos.set(item.x, item.y, item.z);
+      _cScale.set(s, s, s);
+      _cMatrix.compose(_cPos, _cQuat, _cScale);
+      mesh.setMatrixAt(i, _cMatrix);
+    }
+
+    mesh.instanceMatrix.needsUpdate = true;
+
+    // Fade flash
+    if (flashRef.current && flashTimer.current > 0) {
+      flashTimer.current -= dt;
+      flashRef.current.intensity = Math.max(0, (flashTimer.current / 0.3) * 20);
+    }
+  });
+
+  // Coin geometry: thin disc standing upright (like a Mario coin)
+  const coinGeo = useMemo(() => {
+    const geo = new THREE.CylinderGeometry(1, 1, 0.15, 16);
+    geo.rotateZ(Math.PI / 2); // stand upright — flat faces now face left/right
+    return geo;
+  }, []);
+
+  return (
+    <>
+      <instancedMesh ref={meshRef} args={[coinGeo, undefined, COLLECTIBLE_COUNT]}>
+        <meshBasicMaterial color="#ffffff" toneMapped={false} />
+      </instancedMesh>
+      <pointLight ref={flashRef} intensity={0} distance={120} color="#ffffff" />
+    </>
+  );
+}
+
+// ─── Camera Reset (after exiting fly mode) ──────────────────
+
+function CameraReset() {
+  const { camera } = useThree();
+  useEffect(() => {
+    camera.position.set(-400, 450, -600);
+    camera.lookAt(0, 30, 0);
+  }, [camera]);
+  return null;
+}
+
+// ─── Ground ──────────────────────────────────────────────────
+
+function Ground({ color, grid1, grid2 }: { color: string; grid1: string; grid2: string }) {
+  return (
+    <group>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -1, 0]}>
+        <planeGeometry args={[20000, 20000]} />
+        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.15} roughness={0.95} />
+      </mesh>
+      <gridHelper args={[4000, 200, grid1, grid2]} position={[0, -0.5, 0]} />
+    </group>
+  );
+}
+
+// ─── Tree ─────────────────────────────────────────────────────
+
+function Tree3D({ position, variant }: { position: [number, number, number]; variant: number }) {
+  const greens = ['#2d5a1e', '#1e6b2e', '#3a7a2a'];
+  const trunkH = 8 + variant * 1.5;
+  const canopyH = 10 + variant * 2;
+  const canopyR = 6 + variant * 0.8;
+  const gc = greens[variant % greens.length];
+  return (
+    <group position={position}>
+      <mesh position={[0, trunkH / 2, 0]}>
+        <cylinderGeometry args={[1, 1.3, trunkH, 6]} />
+        <meshStandardMaterial color="#5a3a1e" emissive="#5a3a1e" emissiveIntensity={0.3} />
+      </mesh>
+      <mesh position={[0, trunkH + canopyH / 2 - 1, 0]}>
+        <coneGeometry args={[canopyR, canopyH, 8]} />
+        <meshStandardMaterial color={gc} emissive={gc} emissiveIntensity={0.4} />
+      </mesh>
+    </group>
+  );
+}
+
+// ─── Parked Car ───────────────────────────────────────────────
+
+function ParkedCar({ position, rotation, variant }: { position: [number, number, number]; rotation: number; variant: number }) {
+  const colors = ['#c03030', '#3050a0', '#d0d0d0', '#2a2a2a'];
+  const color = colors[variant % colors.length];
+  return (
+    <group position={position} rotation={[0, rotation, 0]}>
+      <mesh position={[0, 1.25, 0]}>
+        <boxGeometry args={[8, 2.5, 3.5]} />
+        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.25} />
+      </mesh>
+      <mesh position={[0, 3.1, 0]}>
+        <boxGeometry args={[5, 2, 3.2]} />
+        <meshStandardMaterial color={color} emissive={color} emissiveIntensity={0.25} />
+      </mesh>
+    </group>
+  );
+}
+
+// ─── Sidewalk ─────────────────────────────────────────────────
+
+function Sidewalk({ position, size, color }: { position: [number, number, number]; size: [number, number]; color?: string }) {
+  const c = color ?? "#585860";
+  return (
+    <mesh position={position} rotation={[-Math.PI / 2, 0, 0]} geometry={_dPlane} scale={[size[0], size[1], 1]}>
+      <meshStandardMaterial color={c} emissive={c} emissiveIntensity={0.2} roughness={0.85} />
+    </mesh>
+  );
+}
+
+// ─── Decoration Renderer ──────────────────────────────────────
+
+function Decorations({ items }: { items: CityDecoration[] }) {
+  return (
+    <>
+      {items.map((d, i) => {
+        switch (d.type) {
+          case 'tree': return <Tree3D key={`tree-${i}`} position={d.position} variant={d.variant} />;
+          case 'streetLamp': return <StreetLamp key={`lamp-${i}`} position={d.position} />;
+          case 'car': return <ParkedCar key={`car-${i}`} position={d.position} rotation={d.rotation} variant={d.variant} />;
+          case 'bench': return <ParkBench key={`bench-${i}`} position={d.position} rotation={d.rotation} />;
+          case 'fountain': return <Fountain key={`fountain-${i}`} position={d.position} />;
+          case 'sidewalk': return <Sidewalk key={`walk-${i}`} position={d.position} size={d.size!} />;
+          default: return null;
+        }
+      })}
+    </>
+  );
+}
+
+// ─── River ───────────────────────────────────────────────────
+
+function River({ river, waterColor, waterEmissive }: { river: CityRiver; waterColor: string; waterEmissive: string }) {
+  const matRef = useRef<THREE.MeshBasicMaterial>(null);
+
+  useFrame(({ clock }) => {
+    if (matRef.current) {
+      matRef.current.opacity = 0.82 + Math.sin(clock.elapsedTime * 0.5) * 0.05;
+    }
+  });
+
+  return (
+    <mesh
+      rotation={[-Math.PI / 2, 0, 0]}
+      position={[river.x + river.width / 2, 0.5, river.centerZ]}
+      renderOrder={1}
+    >
+      <planeGeometry args={[river.width, river.length]} />
+      <meshBasicMaterial
+        ref={matRef}
+        color={waterEmissive}
+        transparent
+        opacity={0.82}
+        depthWrite={false}
+      />
+    </mesh>
+  );
+}
+
+// ─── River Text (watermark) ──────────────────────────────────
+
+function RiverText({ river }: { river: CityRiver }) {
+  const [fontReady, setFontReady] = useState(false);
+  const texRef = useRef<THREE.CanvasTexture | null>(null);
+
+  useEffect(() => {
+    document.fonts.ready.then(() => setFontReady(true));
+  }, []);
+
+  const texture = useMemo(() => {
+    if (!fontReady) return null;
+
+    // Canvas: narrow (river width) x tall (river length)
+    // UV maps: canvas X → plane X (river width), canvas Y → plane Z (river length)
+    const cW = 256;
+    const cH = 4096;
+    const c = document.createElement("canvas");
+    c.width = cW;
+    c.height = cH;
+    const ctx = c.getContext("2d")!;
+    ctx.clearRect(0, 0, cW, cH);
+
+    // Rotate context so horizontal text runs along canvas Y (= river Z)
+    ctx.save();
+    ctx.translate(cW / 2, cH / 2);
+    ctx.rotate(-Math.PI / 2);
+
+    // After rotation: text "width" spans canvas height (river length)
+    // text "height" spans canvas width (river width)
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+
+    ctx.fillStyle = "rgba(255,255,255,0.4)";
+    ctx.font = 'bold 100px "Silkscreen", monospace';
+    ctx.fillText("git.city", 0, 0);
+
+    ctx.restore();
+
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    texRef.current = tex;
+    return tex;
+  }, [fontReady]);
+
+  useEffect(() => {
+    return () => { texRef.current?.dispose(); };
+  }, []);
+
+  if (!texture) return null;
+
+  return (
+    <mesh
+      position={[river.x + river.width / 2, 0.6, river.centerZ]}
+      rotation={[-Math.PI / 2, 0, 0]}
+      renderOrder={2}
+    >
+      <planeGeometry args={[river.width, river.length]} />
+      <meshBasicMaterial
+        map={texture}
+        transparent
+        depthWrite={false}
+      />
+    </mesh>
+  );
+}
+
+// ─── Bridge ──────────────────────────────────────────────────
+
+function Bridge({ bridge }: { bridge: CityBridge }) {
+  const [bx, , bz] = bridge.position;
+  const deckLength = bridge.width;
+  const deckWidth = 18;
+  const deckHeight = 1;
+  const deckY = 6;
+
+  const pillarCount = 3;
+  const pillarSpacing = deckLength / (pillarCount + 1);
+
+  return (
+    <group position={[bx, 0, bz]} rotation={[0, bridge.rotation ?? 0, 0]}>
+      {/* Deck */}
+      <mesh position={[0, deckY, 0]} geometry={_dBox} scale={[deckLength, deckHeight, deckWidth]}>
+        <meshStandardMaterial color="#505860" emissive="#404850" emissiveIntensity={0.4} />
+      </mesh>
+      {/* Guardrails */}
+      <mesh position={[0, deckY + 1, deckWidth / 2 - 0.2]} geometry={_dBox} scale={[deckLength, 1.5, 0.4]}>
+        <meshStandardMaterial color="#606870" emissive="#505860" emissiveIntensity={0.3} />
+      </mesh>
+      <mesh position={[0, deckY + 1, -(deckWidth / 2 - 0.2)]} geometry={_dBox} scale={[deckLength, 1.5, 0.4]}>
+        <meshStandardMaterial color="#606870" emissive="#505860" emissiveIntensity={0.3} />
+      </mesh>
+      {/* Pillars */}
+      {Array.from({ length: pillarCount }, (_, i) => {
+        const px = -deckLength / 2 + pillarSpacing * (i + 1);
+        return (
+          <group key={i}>
+            <mesh position={[px, deckY / 2, 0]} geometry={_dBox} scale={[2.5, deckY, 2.5]}>
+              <meshStandardMaterial color="#404848" emissive="#303838" emissiveIntensity={0.3} />
+            </mesh>
+            {/* Suspension cables (simple lines from pillar tops to deck edges) */}
+            <mesh position={[px, deckY + 8, 0]} geometry={_dBox} scale={[2, 16, 2]}>
+              <meshStandardMaterial color="#404848" emissive="#303838" emissiveIntensity={0.3} />
+            </mesh>
+            {/* Cable left */}
+            <mesh position={[px - deckLength * 0.12, deckY + 6, 0]} rotation={[0, 0, 0.35]} geometry={_dBox} scale={[deckLength * 0.25, 0.3, 0.3]}>
+              <meshStandardMaterial color="#606060" emissive="#505050" emissiveIntensity={0.3} />
+            </mesh>
+            {/* Cable right */}
+            <mesh position={[px + deckLength * 0.12, deckY + 6, 0]} rotation={[0, 0, -0.35]} geometry={_dBox} scale={[deckLength * 0.25, 0.3, 0.3]}>
+              <meshStandardMaterial color="#606060" emissive="#505050" emissiveIntensity={0.3} />
+            </mesh>
+          </group>
+        );
+      })}
+    </group>
+  );
+}
+
+// ─── Waterfront (Docks + Bollards) ──────────────────────────
+
+function Waterfront({ river, dockColor }: { river: CityRiver; dockColor: string }) {
+  const dockPlankRef = useRef<THREE.InstancedMesh>(null);
+  const bollardRef = useRef<THREE.InstancedMesh>(null);
+
+  const dockSpacing = 35;
+  const dockCount = 60; // 30 per side
+  const bollardsPerDock = 2;
+  const totalBollards = dockCount * bollardsPerDock;
+
+  const geos = useMemo(() => ({
+    plank: new THREE.BoxGeometry(8, 0.3, 4),
+    bollard: new THREE.CylinderGeometry(0.5, 0.5, 2, 8),
+  }), []);
+
+  const mats = useMemo(() => ({
+    plank: new THREE.MeshStandardMaterial({ color: dockColor, emissive: dockColor, emissiveIntensity: 0.35 }),
+    bollard: new THREE.MeshStandardMaterial({ color: "#808080", emissive: "#606060", emissiveIntensity: 0.3 }),
+  }), [dockColor]);
+
+  useEffect(() => {
+    if (!dockPlankRef.current || !bollardRef.current) return;
+    const leftX = river.x - 6; // left bank
+    const rightX = river.x + river.width + 6; // right bank
+    const halfRange = (dockCount / 2) * dockSpacing / 2;
+    let di = 0;
+    let bi = 0;
+    const q = new THREE.Quaternion();
+    const s = new THREE.Vector3(1, 1, 1);
+    const p = new THREE.Vector3();
+    const m = new THREE.Matrix4();
+
+    for (let side = 0; side < 2; side++) {
+      const x = side === 0 ? leftX : rightX;
+      for (let i = 0; i < dockCount / 2; i++) {
+        const z = -halfRange + i * dockSpacing;
+        p.set(x, 0.2, z);
+        m.compose(p, q, s);
+        dockPlankRef.current.setMatrixAt(di++, m);
+
+        // Bollards at corners of dock
+        p.set(x - 3.5, 1.1, z - 1.5);
+        m.compose(p, q, s);
+        bollardRef.current.setMatrixAt(bi++, m);
+        p.set(x + 3.5, 1.1, z + 1.5);
+        m.compose(p, q, s);
+        bollardRef.current.setMatrixAt(bi++, m);
+      }
+    }
+
+    dockPlankRef.current.instanceMatrix.needsUpdate = true;
+    bollardRef.current.instanceMatrix.needsUpdate = true;
+  }, [river, dockCount, dockSpacing]);
+
+  useEffect(() => {
+    return () => {
+      Object.values(geos).forEach(g => g.dispose());
+      Object.values(mats).forEach(m => m.dispose());
+    };
+  }, [geos, mats]);
+
+  return (
+    <>
+      <instancedMesh ref={dockPlankRef} args={[geos.plank, mats.plank, dockCount]} />
+      <instancedMesh ref={bollardRef} args={[geos.bollard, mats.bollard, totalBollards]} />
+    </>
+  );
+}
+
+// ─── Orbit Scene (controls + focus) ──────────────────────────
+
+function OrbitScene({ buildings, focusedBuilding, focusedBuildingB, focusPosition, isCompareCinematicPlaying, onCameraMove, homeTarget, maxDistance }: { buildings: CityBuilding[]; focusedBuilding: string | null; focusedBuildingB?: string | null; focusPosition?: [number, number, number] | null; isCompareCinematicPlaying?: boolean; onCameraMove?: (x: number, z: number, tx: number, tz: number) => void; homeTarget?: [number, number, number] | null; maxDistance?: number }) {
+  const controlsRef = useRef<any>(null);
+  const { camera } = useThree();
+  const frameCount = useRef(0);
+
+  // Reset camera on mount — wide panorama from front, E.Arcade centered
+  useEffect(() => {
+    camera.position.set(-800, 700, -1000);
+    camera.lookAt(TARGET_X, TARGET_Y, TARGET_Z);
+  }, [camera]);
+
+  // Camera moves driven by the map UI and shortcuts (Google Maps style):
+  // double-click / + / - zoom, the compass (face north), city chips and radar
+  // clicks (fly to a place). One animation: the target glides, the camera
+  // arcs up with the distance travelled and comes back down, heading turns
+  // the short way.
+  const navAnim = useRef<{
+    t: number; dur: number;
+    fromTarget: THREE.Vector3; toTarget: THREE.Vector3;
+    fromR: number; toR: number; fromTheta: number; toTheta: number; phi: number; arc: number;
+  } | null>(null);
+  const { gl } = useThree();
+  useEffect(() => {
+    const el = gl.domElement;
+    const ray = new THREE.Raycaster();
+    const ndc = new THREE.Vector2();
+    const ground = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+    const sph = new THREE.Spherical();
+    const start = (toTarget: THREE.Vector3, toR: number | null, toTheta: number | null) => {
+      const c = controlsRef.current;
+      if (!c) return;
+      mapNav.userMoved = true;
+      c.autoRotate = false;
+      const from = (c.target as THREE.Vector3).clone();
+      sph.setFromVector3(camera.position.clone().sub(from));
+      const travel = from.distanceTo(toTarget);
+      let dTheta = (toTheta ?? sph.theta) - sph.theta;
+      dTheta = Math.atan2(Math.sin(dTheta), Math.cos(dTheta));
+      navAnim.current = {
+        t: 0,
+        dur: Math.min(2.8, 0.45 + travel / 7000),
+        fromTarget: from, toTarget,
+        fromR: sph.radius, toR: Math.min(c.maxDistance, Math.max(c.minDistance, toR ?? sph.radius)),
+        fromTheta: sph.theta, toTheta: sph.theta + dTheta,
+        phi: sph.phi,
+        arc: Math.min(18000, travel * 0.55),
+      };
+    };
+    const zoomToward = (point: THREE.Vector3 | null, factor: number) => {
+      const c = controlsRef.current;
+      if (!c) return;
+      const target = c.target as THREE.Vector3;
+      const toTarget = point ? target.clone().lerp(point, 1 - factor) : target.clone();
+      start(toTarget, camera.position.distanceTo(target) * factor, null);
+    };
+    const onDbl = (e: MouseEvent) => {
+      const r = el.getBoundingClientRect();
+      ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+      ray.setFromCamera(ndc, camera);
+      const hit = new THREE.Vector3();
+      zoomToward(ray.ray.intersectPlane(ground, hit) ? hit : null, 0.5);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      if (e.key === "+" || e.key === "=") zoomToward(null, 0.6);
+      else if (e.key === "-" || e.key === "_") zoomToward(null, 1 / 0.6);
+    };
+    const unsub = mapNavBus.subscribe((cmd) => {
+      const c = controlsRef.current;
+      if (!c) return;
+      if (cmd.type === "zoom") zoomToward(null, cmd.factor);
+      else if (cmd.type === "north") start((c.target as THREE.Vector3).clone(), null, 0);
+      else if (cmd.type === "flyTo") start(new THREE.Vector3(cmd.x, 0, cmd.z), cmd.distance ?? null, null);
+    });
+    const detachTrackpad = attachTrackpadOrbit(el, () => controlsRef.current);
+    el.addEventListener("dblclick", onDbl);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      unsub();
+      detachTrackpad();
+      el.removeEventListener("dblclick", onDbl);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [gl, camera]);
+
+  const _navSph = useMemo(() => new THREE.Spherical(), []);
+  useFrame((_, delta) => {
+    const c = controlsRef.current;
+    if (!c) return;
+    // Tilt flattens as you zoom out, like Google Earth: close up you can look
+    // across the streets, from high up it becomes a map seen from above.
+    const d = camera.position.distanceTo(c.target);
+    c.maxPolarAngle = MAX_TILT - (MAX_TILT - MIN_TILT_FAR) * smoothstep(2500, 20000, d);
+    const a = navAnim.current;
+    if (a) {
+      a.t = Math.min(1, a.t + delta / a.dur);
+      const e = a.t < 0.5 ? 4 * a.t ** 3 : 1 - (-2 * a.t + 2) ** 3 / 2; // ease in-out
+      c.target.lerpVectors(a.fromTarget, a.toTarget, e);
+      _navSph.set(
+        a.fromR + (a.toR - a.fromR) * e + a.arc * Math.sin(Math.PI * e),
+        a.phi,
+        a.fromTheta + (a.toTheta - a.fromTheta) * e,
+      );
+      camera.position.setFromSpherical(_navSph).add(c.target);
+      c.update();
+      if (a.t >= 1) navAnim.current = null;
+    }
+  });
+
+  // Report camera position ~10fps (every 6 frames), and only when it moved —
+  // an idle camera used to re-render the whole page 10×/s.
+  const lastReported = useRef<[number, number, number, number]>([NaN, NaN, NaN, NaN]);
+  useFrame(() => {
+    frameCount.current++;
+    if (frameCount.current % 6 !== 0 || !onCameraMove) return;
+    const t = controlsRef.current?.target;
+    const x = camera.position.x, z = camera.position.z, tx = t?.x ?? 0, tz = t?.z ?? 0;
+    const l = lastReported.current;
+    if (Math.abs(x - l[0]) + Math.abs(z - l[1]) + Math.abs(tx - l[2]) + Math.abs(tz - l[3]) < 0.5) return;
+    lastReported.current = [x, z, tx, tz];
+    onCameraMove(x, z, tx, tz);
+  });
+
+  return (
+    <>
+      {!isCompareCinematicPlaying && (
+        <CameraFocus buildings={buildings} focusedBuilding={focusedBuilding} focusedBuildingB={focusedBuildingB} controlsRef={controlsRef} focusPosition={focusPosition} />
+      )}
+      {/* Google Maps / Earth style: left-drag pans the ground, right-drag (or
+          Shift/Ctrl + left) rotates and tilts, the wheel zooms toward the
+          cursor, arrows pan; one finger pans, two pinch and rotate; on a
+          trackpad two-finger swipe rotates and tilts, pinch zooms. */}
+      <OrbitControls
+        ref={controlsRef}
+        enableDamping
+        dampingFactor={0.08}
+        minDistance={40}
+        maxDistance={maxDistance ?? 2500}
+        maxPolarAngle={MAX_TILT}
+        target={homeTarget ?? [TARGET_X, TARGET_Y, TARGET_Z]}
+        autoRotate={!mapNav.userMoved}
+        autoRotateSpeed={0.15}
+        mouseButtons={{ LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE }}
+        touches={{ ONE: THREE.TOUCH.PAN, TWO: THREE.TOUCH.DOLLY_ROTATE }}
+        screenSpacePanning={false}
+        zoomToCursor
+        keyEvents
+        keyPanSpeed={40}
+        onStart={() => {
+          // The city stops turning on its own the moment you take the camera.
+          mapNav.userMoved = true;
+          if (controlsRef.current) controlsRef.current.autoRotate = false;
+          navAnim.current = null;
+        }}
+      />
+    </>
+  );
+}
+
+// ─── Wallpaper Orbit (no interaction, auto-rotate + parallax) ─
+
+function WallpaperOrbitScene({ speed }: { speed: number }) {
+  const controlsRef = useRef<any>(null);
+  const { camera } = useThree();
+
+  useEffect(() => {
+    camera.position.set(-800, 700, -1000);
+    camera.lookAt(TARGET_X, TARGET_Y, TARGET_Z);
+  }, [camera]);
+
+  return (
+    <>
+      <OrbitControls
+        ref={controlsRef}
+        enableDamping
+        dampingFactor={0.06}
+        minDistance={40}
+        maxDistance={2500}
+        maxPolarAngle={Math.PI / 2.1}
+        target={[TARGET_X, TARGET_Y, TARGET_Z]}
+        autoRotate
+        autoRotateSpeed={speed}
+        enablePan={false}
+        enableZoom={false}
+        enableRotate={false}
+      />
+      <WallpaperParallax controlsRef={controlsRef} baseTarget={[TARGET_X, TARGET_Y, TARGET_Z]} />
+    </>
+  );
+}
+
+// ─── Main Canvas ─────────────────────────────────────────────
+
+interface Props {
+  buildings: CityBuilding[];
+  plazas: CityPlaza[];
+  decorations: CityDecoration[];
+  river?: CityRiver | null;
+  bridges?: CityBridge[];
+  sfMap?: SFRenderMap | null;
+  flyMode: boolean;
+  flyVehicle?: string;
+  onExitFly: () => void;
+  onCollect?: (score: number, earned: number, combo: number, collected: number, maxCombo: number) => void;
+  themeIndex: number;
+  onHud?: (speed: number, altitude: number, x: number, z: number, yaw: number) => void;
+  onPause?: (paused: boolean) => void;
+  focusedBuilding?: string | null;
+  focusedBuildingB?: string | null;
+  accentColor?: string;
+  onClearFocus?: () => void;
+  onBuildingClick?: (building: CityBuilding) => void;
+  onFocusInfo?: (info: FocusInfo) => void;
+  flyPauseSignal?: number;
+  flyHasOverlay?: boolean;
+  flyStartPaused?: boolean;
+  isMobile?: boolean;
+  onJoystickState?: (state: { baseX: number; baseY: number; dx: number; dy: number } | null) => void;
+  flyBoostActive?: boolean;
+  flyBrakeActive?: boolean;
+  skyAds?: SkyAd[];
+  onAdClick?: (ad: SkyAd) => void;
+  onAdViewed?: (adId: string) => void;
+  introMode?: boolean;
+  onIntroEnd?: () => void;
+  // Fixed quality tier for the session; "high" unless the device/user says otherwise.
+  perfMode?: "low" | "high";
+  // Fired on sustained frame drops (outside intro/cinematics) so the host UI
+  // can suggest switching to low. Never changes quality by itself.
+  onPerfDecline?: () => void;
+  raidPhase?: RaidPhase;
+  raidData?: RaidExecuteResponse | null;
+  raidAttacker?: CityBuilding | null;
+  raidDefender?: CityBuilding | null;
+  onRaidPhaseComplete?: (phase: RaidPhase) => void;
+  /** Camera focus on a fixed world position (e.g. the plaza monument); dims the buildings. */
+  focusPos?: [number, number, number] | null;
+  /** Rendered at the plaza centre, in plaza-local coordinates (inside the scaled plaza group with the SF map). */
+  plazaCenter?: ReactNode;
+  rabbitSighting?: number | null;
+  onRabbitCaught?: () => void;
+  rabbitCinematic?: boolean;
+  onRabbitCinematicEnd?: () => void;
+  rabbitCinematicTarget?: number;
+  ghostPreviewLogin?: string | null;
+  holdRise?: boolean;
+  celebrationActive?: boolean;
+  wallpaperMode?: boolean;
+  wallpaperSpeed?: number;
+  liveByLogin?: Map<string, LiveSession>;
+  cityEnergy?: number;
+  onCompareCinematicEnd?: () => void;
+  onFlyMove?: (x: number, y: number, z: number, yaw: number, bank: number) => void;
+  flyPilotsRef?: React.MutableRefObject<Map<string, RemotePilot>>;
+  flyProjectilesRef?: React.MutableRefObject<Map<string, ActiveProjectile>>;
+  flySelfStateRef?: React.MutableRefObject<SelfPvpState>;
+  flySelfId?: string | null;
+  flyOnShoot?: (x: number, y: number, z: number, dirX: number, dirY: number, dirZ: number) => void;
+  flyOnReportHit?: (targetId: string) => void;
+  flyPvpEnabled?: boolean;
+  flyPendingRespawnRef?: React.MutableRefObject<PendingRespawn | null>;
+  onCameraMove?: (x: number, z: number, tx: number, tz: number) => void;
+  bossPreview?:
+    | { variant: BossVariant; mode: "static"; phase: BossPhase }
+    | { variant: BossVariant; mode: "live"; eventId?: string; maxHp?: number; serverAuthoritative?: boolean; tuning?: import("@/lib/events/schema").BossTuning }
+    | null;
+  flyBossStateRef?: React.MutableRefObject<import("@/lib/useFlyPresence").BossLiveState>;
+  flyEngageBoss?: (maxHp: number) => void;
+  flySendBossHit?: (kind: "boss" | "minion") => void;
+  flySendBossSelfHit?: () => void;
+}
+
+const _SRGB = THREE.SRGBColorSpace;
+
+/**
+ * Sun / Moon + atmosphere driver — the new lighting core.
+ *
+ * Each frame it reads San Francisco's local time, derives the sun altitude, and
+ * samples a cinematic palette (night -> dawn -> day -> dusk). It then drives the
+ * directional light (sun/moon), ambient, hemisphere, fog, background and tone
+ * mapping exposure, and publishes a shared `skyState` the building shader and
+ * sky dome consume — so the whole city moves through a real day/night cycle.
+ *
+ * `forceHour` (0..24) overrides the time for previewing (?hour=).
+ */
+const SUN_DIST = 4000; // light distance from the scene centre
+
+function SunRig({ forceHour }: { forceHour?: number }) {
+  const { scene, gl, camera } = useThree();
+  const dirRef = useRef<THREE.DirectionalLight>(null);
+  const ambRef = useRef<THREE.AmbientLight>(null);
+  const hemiRef = useRef<THREE.HemisphereLight>(null);
+  const targetObj = useMemo(() => new THREE.Object3D(), []);
+
+  useFrame(() => {
+    const { dir, altitudeDeg } = sunPosition(new Date(), forceHour);
+    const p = samplePalette(altitudeDeg);
+
+    if (dirRef.current) {
+      const light = dirRef.current;
+      light.color.setRGB(p.sunColor[0], p.sunColor[1], p.sunColor[2], _SRGB);
+      light.intensity = p.sunStrength;
+      // Shine from the sun/moon direction toward the scene centre (no shadows).
+      light.position.set(dir[0] * SUN_DIST, dir[1] * SUN_DIST, dir[2] * SUN_DIST);
+    }
+    if (ambRef.current) {
+      ambRef.current.color.setRGB(p.ambientColor[0], p.ambientColor[1], p.ambientColor[2], _SRGB);
+      ambRef.current.intensity = p.ambientStrength;
+    }
+    if (hemiRef.current) {
+      hemiRef.current.color.setRGB(p.hemiSky[0], p.hemiSky[1], p.hemiSky[2], _SRGB);
+      hemiRef.current.groundColor.setRGB(p.hemiGround[0], p.hemiGround[1], p.hemiGround[2], _SRGB);
+      hemiRef.current.intensity = p.hemiStrength;
+    }
+
+    // Fog (created by the <fog> element) — animate color + distance.
+    const fog = scene.fog as THREE.Fog | null;
+    if (fog) {
+      fog.color.setRGB(p.fogColor[0], p.fogColor[1], p.fogColor[2], _SRGB);
+      // Above ~2 km (zooming out over the Bay) the fog and the clip planes open
+      // up with altitude, like a map: from high up the whole region reads.
+      const lift = 1 + Math.max(0, camera.position.y - 2000) / 1400;
+      fog.near = p.fogNear * lift;
+      fog.far = p.fogFar * lift;
+      const persp = camera as THREE.PerspectiveCamera;
+      const far = Math.max(16000, fog.far * 1.25);
+      const near = Math.max(6, camera.position.y / 500);
+      if (Math.abs(persp.far - far) > 50 || Math.abs(persp.near - near) > 0.5) {
+        persp.far = far;
+        persp.near = near;
+        persp.updateProjectionMatrix();
+      }
+    }
+    // Background base (the sky dome covers most of it; this fills any gap).
+    if (!(scene.background instanceof THREE.Color)) scene.background = new THREE.Color();
+    scene.background.setRGB(p.bg[0], p.bg[1], p.bg[2], _SRGB);
+
+    gl.toneMappingExposure = p.exposure;
+
+    // Publish for the building shader + sky dome.
+    const s = skyState;
+    s.sunDir = dir;
+    s.sunColor = p.sunColor;
+    s.sunStrength = p.sunStrength;
+    s.ambientColor = p.ambientColor;
+    s.ambientStrength = p.ambientStrength;
+    s.hemiSky = p.hemiSky;
+    s.hemiGround = p.hemiGround;
+    s.hemiStrength = p.hemiStrength;
+    s.skyTop = p.skyTop;
+    s.skyHorizon = p.skyHorizon;
+    s.nightFactor = p.nightFactor;
+    s.ready = true;
+  });
+
+  return (
+    <>
+      <primitive object={targetObj} />
+      <ambientLight ref={ambRef} />
+      <hemisphereLight ref={hemiRef} />
+      <directionalLight ref={dirRef} target={targetObj} />
+    </>
+  );
+}
+
+const SKY_VERT = /* glsl */ `
+  varying vec3 vDir;
+  void main() {
+    vDir = position;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+const SKY_FRAG = /* glsl */ `
+  uniform vec3 uTop;
+  uniform vec3 uHorizon;
+  uniform float uNight;
+  varying vec3 vDir;
+  float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+  void main() {
+    vec3 d = normalize(vDir);
+    float t = smoothstep(-0.12, 0.55, d.y);
+    vec3 col = mix(uHorizon, uTop, t);
+    // sparse stars on the upper sky, only at night
+    if (d.y > 0.04 && uNight > 0.01) {
+      vec2 uv = floor((d.xz / (d.y + 0.25)) * 90.0);
+      float h = hash(uv);
+      float star = smoothstep(0.992, 1.0, h);
+      col += star * uNight * (0.5 + 0.5 * hash(uv + 3.7));
+    }
+    gl_FragColor = vec4(col, 1.0);
+  }
+`;
+
+/** Gradient sky dome (+ night stars) that follows the camera and recolors by time. */
+function DynamicSky() {
+  const matRef = useRef<THREE.ShaderMaterial>(null);
+  const meshRef = useRef<THREE.Mesh>(null);
+  const uniforms = useMemo(
+    () => ({ uTop: { value: new THREE.Color() }, uHorizon: { value: new THREE.Color() }, uNight: { value: 1 } }),
+    [],
+  );
+  useFrame(({ camera }) => {
+    if (meshRef.current) meshRef.current.position.copy(camera.position);
+    const s = skyState;
+    uniforms.uTop.value.setRGB(s.skyTop[0], s.skyTop[1], s.skyTop[2], _SRGB);
+    uniforms.uHorizon.value.setRGB(s.skyHorizon[0], s.skyHorizon[1], s.skyHorizon[2], _SRGB);
+    uniforms.uNight.value = s.nightFactor;
+  });
+  return (
+    <mesh ref={meshRef} scale={[14000, 14000, 14000]} renderOrder={-1} frustumCulled={false}>
+      <sphereGeometry args={[1, 32, 16]} />
+      <shaderMaterial
+        ref={matRef}
+        uniforms={uniforms}
+        vertexShader={SKY_VERT}
+        fragmentShader={SKY_FRAG}
+        side={THREE.BackSide}
+        depthWrite={false}
+        depthTest={false}
+        fog={false}
+      />
+    </mesh>
+  );
+}
+
+// Each sighting maps 1:1 to a generated spawn anchor (sighting N → plazas[N-1]).
+// The SF layout emits exactly one park-centroid spawn per sighting, already
+// ordered near → far, so the mapping is a straight index.
+const RABBIT_PLAZA_INDICES = [0, 1, 2, 3, 4];
+
+// ?lights=0: hides every point light (landmark glows) to measure their cost on phones.
+function NoPointLights() {
+  const scene = useThree((st) => st.scene);
+  useFrame(() => {
+    scene.traverse((o) => { if ((o as THREE.PointLight).isPointLight && o.visible) o.visible = false; });
+  });
+  return null;
+}
+
+export default function CityCanvas({ buildings, plazas, decorations, river, bridges, sfMap, flyMode, flyVehicle, onExitFly, onCollect, themeIndex, onHud, onPause, focusedBuilding, focusedBuildingB, accentColor, onClearFocus, onBuildingClick, onFocusInfo, flyPauseSignal, flyHasOverlay, flyStartPaused, isMobile, onJoystickState, flyBoostActive, flyBrakeActive, skyAds, onAdClick, onAdViewed, introMode, onIntroEnd, perfMode = "high", onPerfDecline, raidPhase, raidData, raidAttacker, raidDefender, onRaidPhaseComplete, focusPos, plazaCenter, rabbitSighting, onRabbitCaught, rabbitCinematic, onRabbitCinematicEnd, rabbitCinematicTarget, ghostPreviewLogin, holdRise, celebrationActive, wallpaperMode, wallpaperSpeed, liveByLogin, cityEnergy, onCompareCinematicEnd, onFlyMove, flyPilotsRef, flyProjectilesRef, flySelfStateRef, flySelfId, flyOnShoot, flyOnReportHit, flyPvpEnabled, flyPendingRespawnRef, onCameraMove, bossPreview, flyBossStateRef, flyEngageBoss, flySendBossHit, flySendBossSelfHit }: Props) {
+  const [isCompareCinematicPlaying, setIsCompareCinematicPlaying] = useState(false);
+  const prevComparePairRef = useRef<string>("");
+
+  // During PvP, every city interaction is suppressed — clicks must only
+  // shoot. Ads and the founder spire would otherwise pause flight or
+  // open overlays.
+  const blockCityClicks = flyMode && flyPvpEnabled === true;
+
+  useEffect(() => {
+    // Determine if we just entered a new comparison
+    if (focusedBuilding && focusedBuildingB) {
+      const pairId = `${focusedBuilding}-${focusedBuildingB}`;
+      if (prevComparePairRef.current !== pairId) {
+        setIsCompareCinematicPlaying(true);
+        prevComparePairRef.current = pairId;
+      }
+    } else {
+      setIsCompareCinematicPlaying(false);
+      prevComparePairRef.current = "";
+    }
+  }, [focusedBuilding, focusedBuildingB]);
+
+  const compareWinner = useMemo(() => {
+    if (!focusedBuilding || !focusedBuildingB) return null;
+    const bA = buildings.find(b => b.login.toLowerCase() === focusedBuilding.toLowerCase());
+    const bB = buildings.find(b => b.login.toLowerCase() === focusedBuildingB.toLowerCase());
+    if (!bA || !bB) return null;
+    return bA.contributions >= bB.contributions ? bA : bB;
+  }, [buildings, focusedBuilding, focusedBuildingB]);
+  const t = THEMES[themeIndex] ?? THEMES[0];
+  const showPerf = typeof window !== "undefined" && new URLSearchParams(window.location.search).has("perf");
+  // Time of day is fixed at 20h for launch (we don't want the city in daylight
+  // yet). ?hour=14 still overrides for previewing.
+  const skyForceHour = useMemo(() => {
+    const DEFAULT_HOUR = 20;
+    if (typeof window === "undefined") return DEFAULT_HOUR;
+    const h = new URLSearchParams(window.location.search).get("hour");
+    if (h == null) return DEFAULT_HOUR;
+    const n = parseFloat(h);
+    return Number.isFinite(n) ? ((n % 24) + 24) % 24 : DEFAULT_HOUR;
+  }, []);
+  // Quality tier is decided before the canvas mounts (device heuristics or the
+  // user's pinned preference) and stays fixed for the whole session — swapping
+  // bloom/DPR mid-flight visibly changes the city's look, which was especially
+  // jarring during the intro flyover. The PerformanceMonitor below only
+  // *reports* sustained frame drops so the HUD can suggest switching to low;
+  // the user makes the call via the perf toggle.
+  const lowPerf = perfMode === "low";
+  // Graphics A/B flags for measuring phones (?logdepth=0|1, ?dpr=1, ?bloom=0, ?smaa=0).
+  // Log depth writes depth per pixel, which turns off the hidden-surface
+  // removal of phone GPUs: off by default on touch devices (2x fps on an
+  // iPhone 15). near 6 / far 16000 stays precise enough without it.
+  const gfx = useMemo(() => {
+    const q = typeof window === "undefined" ? null : new URLSearchParams(window.location.search);
+    const dprParam = Number(q?.get("dpr"));
+    const touch = typeof window !== "undefined" && !!window.matchMedia?.("(pointer: coarse)").matches;
+    const logDepthParam = q?.get("logdepth");
+    return {
+      logDepth: logDepthParam ? logDepthParam !== "0" : !touch,
+      dpr: Number.isFinite(dprParam) && dprParam > 0 ? Math.min(3, dprParam) : null,
+      bloom: q?.get("bloom") !== "0",
+      smaa: q?.get("smaa") !== "0",
+      noLights: q?.get("lights") === "0",
+    };
+  }, []);
+  const dpr = gfx.dpr ?? (lowPerf ? 0.75 : 1.25);
+  const flyPosRef = useRef(new THREE.Vector3());
+
+  const cityRadius = useMemo(() => {
+    let max = 200;
+    for (const b of buildings) {
+      const d = Math.sqrt(b.position[0] ** 2 + b.position[2] ** 2);
+      if (d > max) max = d;
+    }
+    return max;
+  }, [buildings]);
+  // Sky ads, fireworks and fly coins stay over the SF core (its edge sits at
+  // ~13.5k); only the flight boundary follows the whole Bay Area city.
+  const skyRadius = sfMap ? Math.min(cityRadius, 13500) : cityRadius;
+
+  // San Francisco mode: camera + controls frame the downtown (Financial District)
+  // The intro flyover ends on the plaza centre (the town monument).
+  const introTarget = useMemo<[number, number]>(() => {
+    const [x, , z] = plazaCenterWorld(sfMap?.downtown);
+    return [x, z];
+  }, [sfMap]);
+
+  const sfHome = useMemo(() => {
+    if (!sfMap) return null;
+    const [dx, dz] = sfMap.downtown;
+    return {
+      target: [dx, 70, dz] as [number, number, number],
+      camPos: [dx - 500, 1700, dz + 850] as [number, number, number],
+      maxDistance: 36000, // the whole Bay Area from above
+    };
+  }, [sfMap]);
+
+  return (
+    <Canvas
+      shadows={false}
+      camera={{ position: sfHome ? sfHome.camPos : [-400, 450, -600], fov: 55, near: sfHome ? 6 : 0.5, far: sfHome ? 16000 : 15000 }}
+      dpr={dpr}
+      gl={{ antialias: false, powerPreference: "high-performance", toneMapping: THREE.ACESFilmicToneMapping, toneMappingExposure: 1.3, logarithmicDepthBuffer: gfx.logDepth }}
+      style={{ position: "fixed", inset: 0, width: "100vw", height: "100vh" }}
+    >
+      {showPerf && <Stats />}
+      {gfx.noLights && <NoPointLights />}
+      {/* SunRig owns exposure in SF; CityExposure only drives the theme previews. */}
+      {!sfHome && <CityExposure cityEnergy={cityEnergy ?? 1} />}
+      <PerformanceMonitor
+        onDecline={() => {
+          // Intro/cinematics are worst-case load — not a fair benchmark.
+          if (introMode || rabbitCinematic) return;
+          onPerfDecline?.();
+        }}
+      />
+      <fog attach="fog" args={[sfHome ? "#0b1622" : t.fogColor, sfHome ? 1100 : t.fogNear, sfHome ? 6500 : t.fogFar * 0.8]} key={`fog-${themeIndex}-${sfHome ? "sf" : "n"}`} />
+
+      {/* Theme lighting (non-SF) */}
+      {!sfHome && (
+        <>
+          <ThemeLights theme={t} themeIndex={themeIndex} />
+        </>
+      )}
+
+      {/* San Francisco — real day/night cycle driven by SF local time. SunRig
+          drives all lighting + fog + exposure; DynamicSky is the gradient sky. */}
+      {sfHome && (
+        <>
+          <SunRig forceHour={skyForceHour} />
+          <DynamicSky />
+        </>
+      )}
+      {!sfHome && <ThemeSkyFX key={`sky-fx-${themeIndex}`} themeIndex={themeIndex as 0 | 1 | 2 | 3} theme={t} />}
+
+      {introMode && <IntroFlyover onEnd={onIntroEnd ?? (() => { })} lookScale={sfMap ? SF_PLAZA_SCALE : 1} target={introTarget} />}
+
+      {rabbitCinematic && rabbitCinematicTarget != null && (
+        <RabbitFlyover
+          targetPlazaIndex={RABBIT_PLAZA_INDICES[(rabbitCinematicTarget - 1)] ?? 1}
+          plazas={plazas}
+          onEnd={onRabbitCinematicEnd ?? (() => { })}
+        />
+      )}
+
+      {wallpaperMode ? (
+        <WallpaperOrbitScene speed={wallpaperSpeed ?? 0.08} />
+      ) : (
+        <>
+          {!introMode && !rabbitCinematic && !flyMode && (!raidPhase || raidPhase === "idle" || raidPhase === "preview") && (
+            <OrbitScene buildings={buildings} focusedBuilding={focusedBuilding ?? null} focusedBuildingB={focusedBuildingB} focusPosition={focusPos} isCompareCinematicPlaying={isCompareCinematicPlaying} onCameraMove={onCameraMove} homeTarget={sfHome?.target ?? null} maxDistance={sfHome?.maxDistance} />
+          )}
+
+          {isCompareCinematicPlaying && focusedBuilding && focusedBuildingB && (() => {
+            const bA = buildings.find((b) => b.login.toLowerCase() === focusedBuilding.toLowerCase());
+            const bB = buildings.find((b) => b.login.toLowerCase() === focusedBuildingB.toLowerCase());
+            if (bA && bB) {
+              return (
+                <CompareCinematic
+                  buildingA={bA}
+                  buildingB={bB}
+                  controlsRef={{ current: null }} // Let the cinematic own the camera completely while running
+                  onEnd={() => {
+                    setIsCompareCinematicPlaying(false);
+                    onCompareCinematicEnd?.();
+                  }}
+                />
+              );
+            }
+            return null;
+          })()}
+
+          {!isCompareCinematicPlaying && compareWinner && focusedBuildingB && (() => {
+            const bA = buildings.find((b) => b.login.toLowerCase() === focusedBuilding?.toLowerCase());
+            const bB = buildings.find((b) => b.login.toLowerCase() === focusedBuildingB.toLowerCase());
+            if (bA && bB) {
+              return (
+                <>
+                  <LocalizedFireworks
+                    originX={compareWinner.position[0]}
+                    originY={compareWinner.height}
+                    originZ={compareWinner.position[2]}
+                  />
+                  <CompareSplitScreen buildingA={bA} buildingB={bB} />
+                </>
+              );
+            }
+            return null;
+          })()}
+
+          {raidPhase && raidPhase !== "idle" && raidPhase !== "preview" && (
+            <RaidSequence3D
+              phase={raidPhase}
+              attacker={raidAttacker ?? null}
+              defender={raidDefender ?? null}
+              raidData={raidData ?? null}
+              onPhaseComplete={onRaidPhaseComplete ?? (() => { })}
+            />
+          )}
+
+          {!introMode && flyMode && (
+            <>
+              <VehicleFlight onExit={onExitFly} onHud={onHud ?? (() => { })} onPause={onPause ?? (() => { })} pauseSignal={flyPauseSignal} hasOverlay={flyHasOverlay} startPaused={flyStartPaused} vehicleType={flyVehicle} posRef={flyPosRef} cityRadius={cityRadius} isMobile={isMobile} onJoystickState={onJoystickState} boostActive={flyBoostActive} brakeActive={flyBrakeActive} onFlyMove={onFlyMove} onShoot={flyOnShoot} canShoot={flyPvpEnabled === true} pendingRespawnRef={flyPendingRespawnRef} selfStateRef={flySelfStateRef} />
+              <SkyCollectibles playerPosRef={flyPosRef} accentColor={accentColor ?? "#6090e0"} onCollect={onCollect ?? (() => { })} cityRadius={skyRadius} sfMap={sfMap} buildings={buildings} />
+            </>
+          )}
+
+          {/* Remote pilots visible in both explore and fly mode */}
+          {flyPilotsRef && <RemotePilots pilotsRef={flyPilotsRef} selfPosRef={flyPosRef} />}
+
+          {/* PvP projectile swarm (only in fly mode) */}
+          {flyMode && flyProjectilesRef && flyPilotsRef && flySelfStateRef && flyOnReportHit && (
+            <ProjectileSwarm
+              projectilesRef={flyProjectilesRef}
+              pilotsRef={flyPilotsRef}
+              selfStateRef={flySelfStateRef}
+              selfId={flySelfId ?? null}
+              reportHit={flyOnReportHit}
+            />
+          )}
+        </>
+      )}
+
+      {!sfMap && <Ground key={`ground-${themeIndex}`} color={t.groundColor} grid1={t.grid1} grid2={t.grid2} />}
+      {sfMap && <SFMapLayers sfMap={sfMap} />}
+
+      {(() => {
+        // The civic plaza holds one thing: the Town of the week monument.
+        // Built-in layout: the origin. SF map: downtown, at plaza scale.
+        if (!sfMap) return <group position={[0, 0, 0]}>{plazaCenter}</group>;
+        return (
+          <group position={[sfMap.downtown[0], 0, sfMap.downtown[1]]} scale={SF_PLAZA_SCALE}>
+            {plazaCenter}
+          </group>
+        );
+      })()}
+
+      {/* Boss Invasion:
+            ?boss=X                  → live event (BossEvent: shoot, damage, attacks, victory)
+            ?boss=X&bossPhase=N      → static preview at phase N (just the visual)  */}
+      {bossPreview && bossPreview.mode === "static" && (
+        <BossPreview
+          variant={bossPreview.variant}
+          phase={bossPreview.phase}
+          position={[0, 800, 0]}
+          scale={15}
+          rotationY={bossPreview.variant === "duck" ? Math.PI : 0}
+        />
+      )}
+      {bossPreview && bossPreview.mode === "live" && (
+        <BossEvent
+          variant={bossPreview.variant}
+          projectilesRef={flyProjectilesRef}
+          serverAuthoritative={bossPreview.serverAuthoritative}
+          maxHp={bossPreview.maxHp}
+          tuning={bossPreview.tuning}
+          bossStateRef={flyBossStateRef}
+          engageBoss={flyEngageBoss}
+          sendBossHit={flySendBossHit}
+          sendBossSelfHit={flySendBossSelfHit}
+        />
+      )}
+
+      {!wallpaperMode && celebrationActive && <CelebrationEffect cityRadius={skyRadius} />}
+
+      {!wallpaperMode && rabbitSighting && rabbitSighting >= 1 && rabbitSighting <= 5 && (() => {
+        const plazaIdx = RABBIT_PLAZA_INDICES[rabbitSighting - 1];
+        const plaza = plazas[plazaIdx];
+        if (!plaza) return null;
+        const pos: [number, number, number] = [plaza.position[0], 0.5, plaza.position[2]];
+        return (
+          <WhiteRabbit
+            position={pos}
+            visible={true}
+            onCaught={onRabbitCaught ?? (() => { })}
+          />
+        );
+      })()}
+
+      {river && (
+        <>
+          <River river={river} waterColor={t.waterColor} waterEmissive={t.waterEmissive} />
+          <RiverText river={river} />
+          <Waterfront river={river} dockColor={t.dockColor} />
+        </>
+      )}
+
+      {bridges?.map((b, i) => (
+        <Bridge key={`bridge-${i}`} bridge={b} />
+      ))}
+
+      <CityScene
+          buildings={buildings}
+          colors={t.building}
+          focusedBuilding={raidPhase && raidPhase !== "idle" && raidPhase !== "preview" && raidPhase !== "share" && raidPhase !== "done" ? (raidDefender?.login ?? focusedBuilding) : focusedBuilding}
+          focusedBuildingB={raidPhase && raidPhase !== "idle" && raidPhase !== "preview" && raidPhase !== "share" && raidPhase !== "done" ? (raidAttacker?.login ?? null) : focusedBuildingB}
+          hideEffectsFor={raidPhase && raidPhase !== "idle" && raidPhase !== "preview" && raidPhase !== "share" && raidPhase !== "done" ? (raidAttacker?.login ?? null) : null}
+          accentColor={t.building.accent}
+          onBuildingClick={blockCityClicks ? undefined : onBuildingClick}
+          onFocusInfo={onFocusInfo}
+          introMode={introMode}
+          flyMode={flyMode}
+          ghostPreviewLogin={ghostPreviewLogin}
+          holdRise={holdRise}
+          liveByLogin={liveByLogin}
+          cityEnergy={cityEnergy}
+          dimAll={!!focusPos}
+          lowPerf={lowPerf}
+        />
+
+      {!isCompareCinematicPlaying && (!focusedBuilding || !focusedBuildingB) && (
+        <ComparePath
+          buildings={buildings}
+          focusedBuilding={raidPhase && raidPhase !== "idle" && raidPhase !== "preview" && raidPhase !== "share" && raidPhase !== "done" ? (raidDefender?.login ?? focusedBuilding ?? null) : (focusedBuilding ?? null)}
+          focusedBuildingB={raidPhase && raidPhase !== "idle" && raidPhase !== "preview" && raidPhase !== "share" && raidPhase !== "done" ? (raidAttacker?.login ?? null) : (focusedBuildingB ?? null)}
+          accentColor={t.building.accent}
+        />
+      )}
+
+      <InstancedDecorations items={decorations} roadMarkingColor={t.roadMarkingColor} sidewalkColor={t.sidewalkColor} />
+
+      {!wallpaperMode && skyAds && skyAds.length > 0 && (
+        <>
+          <SkyAds ads={skyAds} cityRadius={skyRadius} flyMode={flyMode} onAdClick={blockCityClicks ? undefined : onAdClick} onAdViewed={onAdViewed} />
+          <BuildingAds
+            ads={skyAds}
+            buildings={buildings}
+            onAdClick={blockCityClicks ? undefined : onAdClick}
+            onAdViewed={onAdViewed}
+            focusedBuilding={raidPhase && raidPhase !== "idle" && raidPhase !== "preview" && raidPhase !== "share" && raidPhase !== "done" ? (raidDefender?.login ?? focusedBuilding) : focusedBuilding}
+            focusedBuildingB={raidPhase && raidPhase !== "idle" && raidPhase !== "preview" && raidPhase !== "share" && raidPhase !== "done" ? (raidAttacker?.login ?? null) : focusedBuildingB}
+          />
+        </>
+      )}
+
+      {!lowPerf && (gfx.bloom || gfx.smaa) && (
+        <EffectComposer multisampling={0}>
+          {/* NOTE: N8AO removed — it reconstructs positions from the depth buffer
+              and does not support the renderer's logarithmicDepthBuffer (needed for
+              the huge near:0.5 / far:15000 range), which produced warped windows. */}
+          {/* Glow for the lit contribution cells — the signature pop/halo. */}
+          {gfx.bloom ? (
+            <Bloom
+              mipmapBlur
+              luminanceThreshold={0.5}
+              luminanceSmoothing={0.45}
+              intensity={1.5 * Math.max(0.25, cityEnergy ?? 1)}
+            />
+          ) : <></>}
+          {gfx.smaa ? <SMAA /> : <></>}
+        </EffectComposer>
+      )}
+    </Canvas>
+  );
+}

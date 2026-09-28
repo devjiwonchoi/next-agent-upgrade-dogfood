@@ -1,0 +1,33 @@
+---
+title: "Docker"
+description: "Container deployment requirements for ChatJS"
+---
+
+ChatJS does not currently publish or validate a Docker deployment layout for the EVE-only application. Do not treat a generic Next.js standalone image as a working ChatJS deployment.
+
+<Callout type="warning">
+  Hosted provider deletion and guest-hosting validation remain release gates.
+  This page records container requirements; it does not certify Docker or
+  Compose for production use.
+</Callout>
+
+## Required topology
+
+An EVE-aware container deployment needs all of the following:
+
+- **Node.js 24+** for the application and EVE runtime
+- The complete EVE `.output` tree produced by `eve build`, including `.output/server`; copying only `.next/standalone` and `.next/static` omits EVE output
+- Your public application origin in `APP_URL` (for example, `https://chat.example.com`), required for application URLs and authentication on non-Vercel deployments
+- Optionally, `EVE_INTERNAL_ORIGIN` to override the application gateway serving `/eve/chat/v1/*`. It defaults to `APP_URL` on non-Vercel deployments and does not configure the authentication origin or replace `APP_URL`
+- Independently generated `AUTH_SECRET` and `EVE_GATEWAY_SECRET`, plus database credentials, at build and runtime
+- A compatible direct/session Postgres connection with application and workflow schemas initialized; they may share one database
+
+Run `npm run setup` with your application and workflow database connections before the application starts. It supports PostgreSQL service hostnames as well as loopback URLs. Provider schema setup alone does not establish hosted deletion coverage. See [database setup](../reference/database#eve-workflow-database).
+
+For self-hosted guest access, terminate traffic at a trusted proxy. Configure `TRUSTED_CLIENT_IP_HEADER` only when that proxy overwrites the caller-provided header with one verified client IP. Vercel uses its own trusted header.
+
+## Current support boundary
+
+The EVE runtime has passed local production-mode checks, but Docker image lifecycle validation is not complete for this release. A deployment must preserve the `eve build` output, run the required topology, provision its databases, and validate its own lifecycle behavior before it can be considered for use.
+
+Use the [Quickstart](/quickstart) for local development and [Self-Hosted](/deployment/self-hosted) for the remaining deployment limits.

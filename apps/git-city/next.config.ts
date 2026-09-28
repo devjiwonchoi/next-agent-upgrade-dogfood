@@ -1,0 +1,112 @@
+import type { NextConfig } from "next";
+import type { Configuration as WebpackConfig } from "webpack";
+import { TOWN_REDIRECTS } from "./src/lib/towns/redirects";
+
+const securityHeaders = [
+  // Prevent clickjacking – block all framing
+  { key: "X-Frame-Options", value: "DENY" },
+  // Block MIME-type sniffing (e.g. treating a .txt as script)
+  { key: "X-Content-Type-Options", value: "nosniff" },
+  // Control what info the Referer header leaks
+  { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+  // Disable unnecessary browser APIs
+  {
+    key: "Permissions-Policy",
+    value: "camera=(), microphone=(), geolocation=(), browsing-topics=()",
+  },
+  // Enable DNS prefetch for faster navigation
+  { key: "X-DNS-Prefetch-Control", value: "on" },
+  // Force HTTPS (browsers cache this for 2 years)
+  {
+    key: "Strict-Transport-Security",
+    value: "max-age=63072000; includeSubDomains; preload",
+  },
+  // CSP, the directives that can't break the app: no framing, no plugins, no
+  // <base> hijack (HSTS already forces HTTPS). Script/connect sources come later, once a
+  // report-only run lists every third party the pages load.
+  {
+    key: "Content-Security-Policy",
+    value: "frame-ancestors 'none'; object-src 'none'; base-uri 'self'",
+  },
+];
+
+const nextConfig: NextConfig = {
+  // Portless serve cada worktree em <branch>.git-city.localhost (via proxy HTTPS).
+  // O Next 16 bloqueia recursos de dev (HMR, fontes) de origens cross-site por
+  // padrão; o wildcard libera qualquer subdomínio de worktree de uma vez.
+  // Efeito só em desenvolvimento — ignorado no build de produção.
+  allowedDevOrigins: ["git-city.localhost", "*.git-city.localhost", "git-city.cool", "*.git-city.cool"],
+  images: {
+    unoptimized: true,
+    remotePatterns: [
+      {
+        protocol: "https",
+        hostname: "avatars.githubusercontent.com",
+      },
+      {
+        protocol: "https",
+        hostname: "kxuhnbmureteruqbiubi.supabase.co",
+        pathname: "/storage/v1/object/public/**",
+      },
+    ],
+  },
+  webpack: (config: WebpackConfig) => {
+    config.resolve = config.resolve ?? {};
+    config.resolve.alias = {
+      ...(config.resolve.alias as Record<string, string | false>),
+      "pino-pretty": false,
+      "@react-native-async-storage/async-storage": false,
+    };
+    return config;
+  },
+  skipTrailingSlashRedirect: true,
+  async redirects() {
+    return [...TOWN_REDIRECTS];
+  },
+  async rewrites() {
+    return [
+      {
+        source: "/ingest/static/:path*",
+        destination: "https://us-assets.i.posthog.com/static/:path*",
+      },
+      {
+        source: "/ingest/array/:path*",
+        destination: "https://us-assets.i.posthog.com/array/:path*",
+      },
+      {
+        source: "/ingest/:path*",
+        destination: "https://us.i.posthog.com/:path*",
+      },
+    ];
+  },
+  async headers() {
+    return [
+      {
+        source: "/models/:path*",
+        headers: [
+          { key: "Cache-Control", value: "public, max-age=31536000, immutable" },
+        ],
+      },
+      {
+        // Baked map data: unhashed URL, so revalidate hourly rather than immutable.
+        source: "/maps/:path*",
+        headers: [
+          { key: "Cache-Control", value: "public, max-age=3600, stale-while-revalidate=86400" },
+        ],
+      },
+      {
+        source: "/audio/:path*",
+        headers: [
+          { key: "Cache-Control", value: "public, max-age=31536000, immutable" },
+        ],
+      },
+      {
+        // Apply security headers to all routes
+        source: "/(.*)",
+        headers: securityHeaders,
+      },
+    ];
+  },
+};
+
+export default nextConfig;

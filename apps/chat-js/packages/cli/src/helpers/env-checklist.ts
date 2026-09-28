@@ -1,0 +1,170 @@
+import { BUILT_IN_TOOL_KEYS, CORE_FEATURE_KEYS } from "../types";
+import type {
+  AuthProvider,
+  BuiltInToolKey,
+  CoreFeatureKey,
+  Gateway,
+} from "../types";
+import {
+  authEnvRequirements,
+  builtInToolEnvRequirements,
+  coreFeatureEnvRequirements,
+  envVarDescriptions,
+  gatewayEnvRequirements,
+} from "./config-requirements";
+
+type EnvRequirementLike = {
+  description?: string;
+  options: string[][];
+};
+
+export type EnvVarEntry = {
+  /** The env var name(s), e.g. "AI_GATEWAY_API_KEY" or "AUTH_GOOGLE_ID + AUTH_GOOGLE_SECRET" */
+  vars: string;
+  /** Human-readable description derived from the Zod schema */
+  description: string;
+  /** Group key used to render "one of" alternatives together */
+  oneOfGroup?: string;
+};
+
+const envDescriptions = new Map(Object.entries(envVarDescriptions));
+
+type EnvChecklistInput = {
+  gateway: Gateway;
+  gatewayRequirements?: EnvRequirementLike[];
+  coreFeatures: Record<CoreFeatureKey, boolean>;
+  builtInTools: Record<BuiltInToolKey, boolean>;
+  auth: Record<AuthProvider, boolean>;
+  installableToolEnvRequirements?: EnvRequirementLike[];
+};
+
+/**
+ * Expand an EnvRequirement into one or more EnvVarEntries, pulling
+ * descriptions from the Zod schema.
+ */
+const requirementToEntries = (
+  requirement: EnvRequirementLike
+): EnvVarEntry[] => {
+  const oneOfGroup =
+    requirement.options.length > 1
+      ? requirement.options
+          .map((group) => group.map(String).join("+"))
+          .join("|")
+      : undefined;
+
+  return requirement.options.map((group) => {
+    const description = group
+      .map((v) => {
+        const varName = String(v);
+        return envDescriptions.get(varName) ?? varName;
+      })
+      .join(", ");
+
+    return {
+      description:
+        description ||
+        requirement.description ||
+        "Required environment variable",
+      oneOfGroup,
+      vars: group.map(String).join(" + "),
+    };
+  });
+};
+
+const addRequirementEntries = (
+  entries: EnvVarEntry[],
+  requirement: EnvRequirementLike | undefined,
+  seen: Set<string>,
+  dedupeKey: string | undefined = requirement?.description
+): void => {
+  if (!requirement || dedupeKey === undefined || seen.has(dedupeKey)) {
+    return;
+  }
+
+  seen.add(dedupeKey);
+  entries.push(...requirementToEntries(requirement));
+};
+
+const collectFeatureEntries = (input: EnvChecklistInput): EnvVarEntry[] => {
+  const featureItems: EnvVarEntry[] = [];
+  const seen = new Set<string>();
+
+  for (const feature of CORE_FEATURE_KEYS) {
+    if (!input.coreFeatures[feature]) {
+      continue;
+    }
+
+    addRequirementEntries(
+      featureItems,
+      coreFeatureEnvRequirements[
+        feature as keyof typeof coreFeatureEnvRequirements
+      ],
+      seen
+    );
+  }
+
+  for (const tool of BUILT_IN_TOOL_KEYS) {
+    if (
+      tool === "webSearch" ||
+      tool === "urlRetrieval" ||
+      tool === "deepResearch" ||
+      tool === "codeExecution" ||
+      !input.builtInTools[tool]
+    ) {
+      continue;
+    }
+
+    addRequirementEntries(
+      featureItems,
+      builtInToolEnvRequirements[
+        tool as keyof typeof builtInToolEnvRequirements
+      ],
+      seen
+    );
+  }
+
+  for (const requirement of input.installableToolEnvRequirements ?? []) {
+    const dedupeKey =
+      requirement.description ??
+      requirement.options.map((option) => option.join("+")).join("|");
+    addRequirementEntries(featureItems, requirement, seen, dedupeKey);
+  }
+
+  return featureItems;
+};
+
+const collectAuthEntries = (input: EnvChecklistInput): EnvVarEntry[] => {
+  const authItems: EnvVarEntry[] = [];
+
+  for (const provider of Object.keys(authEnvRequirements) as AuthProvider[]) {
+    if (input.auth[provider]) {
+      authItems.push(...requirementToEntries(authEnvRequirements[provider]));
+    }
+  }
+
+  return authItems;
+};
+
+export const collectEnvChecklist = (
+  input: EnvChecklistInput
+): EnvVarEntry[] => {
+  const entries: EnvVarEntry[] = [
+    {
+      description: envDescriptions.get("AUTH_SECRET") ?? "AUTH_SECRET",
+      vars: "AUTH_SECRET",
+    },
+    {
+      description: envDescriptions.get("DATABASE_URL") ?? "DATABASE_URL",
+      vars: "DATABASE_URL",
+    },
+  ];
+
+  const gwReq =
+    input.gatewayRequirements ?? gatewayEnvRequirements[input.gateway] ?? [];
+  return [
+    ...entries,
+    ...gwReq.flatMap(requirementToEntries),
+    ...collectFeatureEntries(input),
+    ...collectAuthEntries(input),
+  ];
+};

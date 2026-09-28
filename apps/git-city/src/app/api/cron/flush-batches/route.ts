@@ -1,0 +1,25 @@
+import { NextRequest, NextResponse } from "next/server";
+import { flushPendingBatches } from "@/lib/notifications";
+
+export const maxDuration = 300;
+
+const TIME_BUDGET_MS = 240_000;
+
+/**
+ * Cron: Every 15 minutes - Flush closed notification batches.
+ * Compiles digest emails for batched events (raids, achievements, etc).
+ */
+export async function GET(request: NextRequest) {
+  const authHeader = request.headers.get("authorization");
+  if (!process.env.CRON_SECRET || authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  try {
+    const flushed = await flushPendingBatches(Date.now() + TIME_BUDGET_MS);
+    return NextResponse.json({ ok: true, batches_flushed: flushed });
+  } catch (err) {
+    console.error("[cron:flush-batches] Error:", err);
+    return NextResponse.json({ ok: false, error: String(err) }, { status: 500 });
+  }
+}

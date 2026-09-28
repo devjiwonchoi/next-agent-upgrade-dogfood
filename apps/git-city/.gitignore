@@ -1,0 +1,98 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files (can opt-in for committing if needed)
+.env*
+!.env.example
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# private docs (strategy, plans, content scripts)
+GROWTH_PLAN.md
+docs/plans/
+docs/tiktok/
+docs/cloudflare-setup.md
+
+# claude code local settings
+.claude/
+
+trace/
+docs/
+
+*.mp4
+*.mov
+
+.vscode
+
+# partykit local state
+.partykit/
+
+# The scripts/ folder is local-only — scratch tooling, seeders and infra that
+# shouldn't ship. Nothing under it is tracked.
+scripts/
+
+# Bankr sponsor-vehicle GLB pipeline outputs
+public/bankr.svg
+public/bankr-monitor-preview.html
+
+# local POCs / scratch SQL / supabase CLI cache
+poc/
+supabase/snippets/
+supabase/.temp/
+
+# vscode extension build artifacts
+packages/vscode-extension/dist/
+packages/vscode-extension/package-lock.json
+packages/vscode-extension/*.vsix
+
+public/cozy/
+
+# Cosmetic GLB models live in Supabase Storage (bucket cosmetic-models), not git.
+# A new cosmetic is upload + a catalog row — never a commit. Generated locally as
+# upload staging via scripts/gen-*.mjs, then pushed with upload-cosmetic-models.mjs.
+public/models/vehicles/
+
+# Production schema dumps used for local bootstrapping (never commit prod artifacts)
+supabase/*.prod_schema.sql
+
+# OSM raw cache for SF map bake (re-downloadable)
+scripts/.osm-cache/
+
+# Raw Kenney asset-kit downloads. We commit only the GLBs we use (public/models);
+# the unpacked kit folders stay local.
+kenney/
+.env.local

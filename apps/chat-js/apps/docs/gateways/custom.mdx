@@ -1,0 +1,57 @@
+---
+title: "Custom Gateway"
+description: "Compose a ChatJS app with a third-party gateway registry item"
+---
+
+Install a custom gateway when creating your app. If your endpoint implements the OpenAI API, you can also use the built-in [OpenAI Compatible](/gateways/openai-compatible) gateway.
+
+```sh
+chat-js create my-chat --gateway https://example.com/r/my-gateway.json
+chat-js create my-chat --gateway ./my-gateway.json
+```
+
+Remote registry items and their dependencies require HTTPS. HTTP is supported for loopback development servers only.
+
+## Author a registry item
+
+Start from a built-in item in the [gateway registry](https://github.com/FranciscoMoretti/chat-js/tree/cbfc757b353bc29bb46b58d14b994f798859ce8e/packages/registry/src/gateways). The [authoring contract](https://github.com/FranciscoMoretti/chat-js/blob/cbfc757b353bc29bb46b58d14b994f798859ce8e/packages/registry/src/gateways/README.md) describes the complete metadata and adapter interface.
+
+Your root item must use `type: "registry:item"`. Declare its SDK in `dependencies`, and include an adapter exporting `Gateway` at `~/lib/ai/gateway.ts`. Supporting files belong under `~/lib/ai/gateway/` and can come from `registryDependencies`.
+
+Set `meta.chatjs` with:
+
+- `kind: "gateway"`, `contractVersion: 1`, and a unique literal `id`.
+- `capabilities` describing image and video support.
+- Complete `defaults` for models, workflows, documents, and tools. Use model IDs served by your endpoint.
+- `envRequirements`, an array of required groups. Each group's `options` contains alternative sets of variables.
+- `optionalEnv` for additional variables the adapter reads.
+
+For example, an endpoint that requires a base URL and accepts an optional API key can declare:
+
+```json
+{
+  "envRequirements": [{ "options": [["MY_GATEWAY_BASE_URL"]] }],
+  "optionalEnv": ["MY_GATEWAY_API_KEY"]
+}
+```
+
+This is a metadata fragment, not a complete registry item. Read declared credentials through the adapter's injected environment, such as `this.env.MY_GATEWAY_API_KEY` when extending `GatewayRuntime` from `@chat-js/gateways/runtime`.
+
+## Generated app
+
+The CLI installs the selected adapter and dependencies, then writes `lib/ai/gateway-model-defaults.ts` with the gateway ID, defaults, capabilities, and environment declarations. `lib/env.ts` forwards those declared variables to the adapter, and `scripts/check-env.ts` checks the requirements. You do not add gateway entries to a central application registry or environment schema.
+
+The generated `chat.config.ts` selects your gateway. Add credentials to `.env.local`, then verify the app:
+
+```sh
+bun test:types
+bun fetch:models
+bun dev
+```
+
+Send a real chat message to verify provider authentication and streaming. Type checks validate the adapter interface and configuration, but cannot verify remote credentials or model availability.
+
+## Related
+
+- [Gateways Overview](/gateways/overview)
+- [Multi-Model Support](/core/multi-model)

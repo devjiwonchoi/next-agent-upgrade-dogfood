@@ -1,0 +1,249 @@
+// ─── Drive colliders ────────────────────────────────────────
+// Maps the city to physics shapes, in meters. Buildings, trees, ramps, the
+// portal pillars, billboard legs, flag poles, the ground and the edge walls
+// are fixed; lamps, benches and fountains are dynamic bodies that get knocked
+// over and reset. Planes and blimps have none. Ids are stable per object
+// (walls and ground carry the size), so a city change only swaps the shapes
+// that changed.
+
+import type { CityBuilding } from "@/lib/github";
+import { rotToRadians, worldBounds } from "../grid";
+import { APPROACH_LOTS, BILLBOARD, FLAG, PORTAL } from "../identity-geometry";
+import { LOT } from "../grid";
+import { RAMP, RAMP_BIG, rampCorners, type RampSize } from "../ramp";
+import { CONE, SPEED_BUMP, TIRE_WALL_HEIGHT, TIRE_WALL_WIDTH, TIRE, crateLayout, toWorld, CRATE } from "../toys";
+import { TREE_TYPES, type CityObject } from "../types";
+import { CLAWD, CLOUD, CONTEXT_WINDOW, SANDBOX, clawdBase, clawdUnit, cloudUnit, mascotSize } from "../rivalry-geometry";
+import { PROPS, TOYS, UNIT_TO_M, WALL } from "./tuning";
+
+export type DynamicProp = "lamp" | "bench" | "fountain" | "cone" | "crate";
+
+export type ColliderShape =
+  | { type: "cuboid"; half: [number, number, number] }
+  | { type: "cylinder"; radius: number; halfHeight: number }
+  /** Convex hull, points relative to `pos`, already turned. */
+  | { type: "hull"; points: number[] };
+
+export interface ColliderSpec {
+  id: string;
+  body: "fixed" | "dynamic";
+  /** Center, meters. */
+  pos: [number, number, number];
+  /** Rotation about y, radians (three.js convention). */
+  rotY: number;
+  shape: ColliderShape;
+  /** Dynamic props only. */
+  prop?: DynamicProp;
+  mass?: number;
+  /** Bounciness; tire walls throw the car back. */
+  restitution?: number;
+}
+
+const U = UNIT_TO_M;
+const TREES = new Set<string>(TREE_TYPES);
+
+/** Points (local units, y up) turned `rot` and converted to meters, as a flat list for a hull. */
+function hull(points: [number, number, number][], rotY: number): number[] {
+  const c = Math.cos(rotY);
+  const s = Math.sin(rotY);
+  const out: number[] = [];
+  // Turn about y like three.js: x' = x cos + z sin, z' = -x sin + z cos.
+  for (const [px, py, pz] of points) out.push((px * c + pz * s) * U, py * U, (-px * s + pz * c) * U);
+  return out;
+}
+
+function rampHull(size: RampSize, rotY: number): ColliderShape {
+  return { type: "hull", points: hull(rampCorners(size), rotY) };
+}
+
+/** A low trapezoid across the road. */
+function bumpHull(rotY: number): ColliderShape {
+  const w = SPEED_BUMP.width / 2;
+  const d = SPEED_BUMP.depth / 2;
+  const h = SPEED_BUMP.height;
+  const top = d * 0.35;
+  return {
+    type: "hull",
+    points: hull(
+      [
+        [-w, 0, -d], [w, 0, -d], [w, 0, d], [-w, 0, d],
+        [-w, h, -top], [w, h, -top], [w, h, top], [-w, h, top],
+      ],
+      rotY,
+    ),
+  };
+}
+
+function propColliders(o: CityObject): ColliderSpec[] {
+  if (o.px === null || o.pz === null || !o.item_type) return [];
+  const rotY = rotToRadians(o.rot);
+  if (o.item_type === "crates") {
+    const { mass } = PROPS.crate;
+    const half = (CRATE / 2) * U;
+    return crateLayout().map(([lx, ly, lz], i) => {
+      const [wx, wz] = toWorld(o.px!, o.pz!, o.rot, lx, lz);
+      return { id: `${o.id}:${i}`, body: "dynamic", prop: "crate", mass, pos: [wx * U, ly * U, wz * U], rotY, shape: { type: "cuboid", half: [half, half, half] } };
+    });
+  }
+  if (o.item_type === "portal" || o.item_type === "billboard") {
+    // Two posts across the object's width, turned with it: the car passes between them.
+    const [off, half] =
+      o.item_type === "portal"
+        ? [PORTAL.halfSpan, [(PORTAL.pillar / 2) * U, (PORTAL.height / 2) * U, (PORTAL.pillar / 2) * U] as [number, number, number]]
+        : [BILLBOARD.legX, [(BILLBOARD.leg / 2) * U, ((BILLBOARD.bottom + BILLBOARD.h) / 2) * U, (BILLBOARD.leg / 2) * U] as [number, number, number]];
+    return [-off, off].map((lx, i) => {
+      const [wx, wz] = toWorld(o.px!, o.pz!, o.rot, lx, 0);
+      return { id: `${o.id}:${i}`, body: "fixed", pos: [wx * U, half[1], wz * U], rotY, shape: { type: "cuboid", half } };
+    });
+  }
+  if (o.item_type === "flag") {
+    const halfHeight = (FLAG.poleH / 2) * U;
+    return [{ id: o.id, body: "fixed", pos: [o.px * U, halfHeight, o.pz * U], rotY: 0, shape: { type: "cylinder", radius: FLAG.pole * 2 * U, halfHeight } }];
+  }
+  if (o.item_type === "tire_wall") {
+    const half: [number, number, number] = [(TIRE_WALL_WIDTH / 2) * U, (TIRE_WALL_HEIGHT / 2) * U, (TIRE.width / 2) * U];
+    return [{ id: o.id, body: "fixed", pos: [o.px * U, half[1], o.pz * U], rotY, shape: { type: "cuboid", half }, restitution: TOYS.tireRestitution }];
+  }
+  if (o.item_type === "clawd" || o.item_type === "codex_cloud" || o.item_type === "context_window" || o.item_type === "sandbox") {
+    return rivalryColliders(o, rotY);
+  }
+  const one = propCollider(o);
+  return one ? [one] : [];
+}
+
+/** A fixed box at local offset (lx, y, lz) from the object, turned with it. */
+function box(o: CityObject, i: number | string, rotY: number, lx: number, y: number, lz: number, half: [number, number, number]): ColliderSpec {
+  const [wx, wz] = toWorld(o.px!, o.pz!, o.rot, lx, lz);
+  return { id: `${o.id}:${i}`, body: "fixed", pos: [wx * U, y * U, wz * U], rotY, shape: { type: "cuboid", half: [half[0] * U, half[1] * U, half[2] * U] } };
+}
+
+// Claude Code vs Codex pieces (sizes in rivalry-geometry.ts).
+function rivalryColliders(o: CityObject, rotY: number): ColliderSpec[] {
+  const size = mascotSize(o.props);
+  if (o.item_type === "clawd") {
+    const u = clawdUnit(size);
+    const base = clawdBase(size);
+    const steps =
+      size === "giant"
+        ? Array.from({ length: CLAWD.plinthSteps }, (_, i) =>
+            box(o, `step${i}`, rotY, 0, CLAWD.plinthStep * (i + 0.5), 0, [
+              ((CLAWD.plinthW - i * CLAWD.plinthShrinkW) * u) / 2,
+              CLAWD.plinthStep / 2,
+              ((CLAWD.plinthD - i * CLAWD.plinthShrinkD) * u) / 2,
+            ]),
+          )
+        : [];
+    const tall = (CLAWD.legH + CLAWD.bodyH) * u;
+    return [...steps, box(o, "body", rotY, 0, base + tall / 2, 0, [CLAWD.reach * u, tall / 2, (CLAWD.bodyD * u) / 2])];
+  }
+  if (o.item_type === "codex_cloud") {
+    const u = cloudUnit(size);
+    const pad = { id: `${o.id}:pad`, body: "fixed" as const, pos: [o.px! * U, (CLOUD.padH / 2) * U, o.pz! * U] as [number, number, number], rotY: 0, shape: { type: "cylinder" as const, radius: CLOUD.padR * u * U, halfHeight: (CLOUD.padH / 2) * U } };
+    const hover = CLOUD.hover[size];
+    const top = CLOUD.top * u;
+    const cx = ((CLOUD.x0 + CLOUD.x1) / 2) * u;
+    return [pad, box(o, "cloud", rotY, cx, hover + top / 2, 0, [((CLOUD.x1 - CLOUD.x0) * u) / 2, top / 2, CLOUD.halfD * u])];
+  }
+  if (o.item_type === "context_window") {
+    const { w, h, base, leg, legX, depth } = CONTEXT_WINDOW;
+    return [
+      box(o, "legL", rotY, -legX, base / 2, 0, [leg / 2, base / 2, leg / 2]),
+      box(o, "legR", rotY, legX, base / 2, 0, [leg / 2, base / 2, leg / 2]),
+      box(o, "screen", rotY, 0, base + h / 2, 0, [(w + 3) / 2, (h + 3) / 2, depth / 2]),
+    ];
+  }
+  // Sandbox: the fence all round and the castle; the sand itself is flat.
+  const k = SANDBOX.scale;
+  const half = (SANDBOX.size / 2) * k;
+  const fh = (SANDBOX.fenceH * k) / 2;
+  const t = 0.8 * k;
+  return [
+    box(o, "fenceN", rotY, 0, fh, -half, [half, fh, t]),
+    box(o, "fenceS", rotY, 0, fh, half, [half, fh, t]),
+    box(o, "fenceW", rotY, -half, fh, 0, [t, fh, half]),
+    box(o, "fenceE", rotY, half, fh, 0, [t, fh, half]),
+    box(o, "castle", rotY, 0, (SANDBOX.castleH * k) / 2, SANDBOX.castleZ * k, [(SANDBOX.castleW * k) / 2, (SANDBOX.castleH * k) / 2, (SANDBOX.castleD * k) / 2]),
+    // The sign stands just outside the front fence, from the ground up.
+    box(o, "sign", rotY, 0, (11 * k) / 2, half + 1 * k, [13 * k, (11 * k) / 2, 0.5 * k]),
+  ];
+}
+
+function propCollider(o: CityObject): ColliderSpec | null {
+  if (o.px === null || o.pz === null || !o.item_type) return null;
+  const x = o.px * U;
+  const z = o.pz * U;
+  const rotY = rotToRadians(o.rot);
+  const t = o.item_type;
+  if (TREES.has(t)) {
+    const { radius, halfHeight } = PROPS.tree;
+    return { id: o.id, body: "fixed", pos: [x, halfHeight, z], rotY: 0, shape: { type: "cylinder", radius, halfHeight } };
+  }
+  if (t === "lamp") {
+    const { radius, halfHeight, mass } = PROPS.lamp;
+    return { id: o.id, body: "dynamic", prop: t, mass, pos: [x, halfHeight, z], rotY, shape: { type: "cylinder", radius, halfHeight } };
+  }
+  if (t === "bench") {
+    const { half, mass } = PROPS.bench;
+    return { id: o.id, body: "dynamic", prop: t, mass, pos: [x, half[1], z], rotY, shape: { type: "cuboid", half: [...half] } };
+  }
+  if (t === "fountain") {
+    const { radius, halfHeight, mass } = PROPS.fountain;
+    return { id: o.id, body: "dynamic", prop: t, mass, pos: [x, halfHeight, z], rotY, shape: { type: "cylinder", radius, halfHeight } };
+  }
+  if (t === "ramp") return { id: o.id, body: "fixed", pos: [x, 0, z], rotY: 0, shape: rampHull(RAMP, rotY) };
+  if (t === "ramp_big") return { id: o.id, body: "fixed", pos: [x, 0, z], rotY: 0, shape: rampHull(RAMP_BIG, rotY) };
+  if (t === "speed_bump") return { id: o.id, body: "fixed", pos: [x, 0, z], rotY: 0, shape: bumpHull(rotY) };
+  if (t === "cone") {
+    const halfHeight = (CONE.height / 2) * U;
+    return { id: o.id, body: "dynamic", prop: "cone", mass: PROPS.cone.mass, pos: [x, halfHeight, z], rotY, shape: { type: "cylinder", radius: CONE.radius * 0.7 * U, halfHeight } };
+  }
+  return null;
+}
+
+export function buildColliders(objects: readonly CityObject[], buildings: readonly CityBuilding[], h: number): ColliderSpec[] {
+  const out: ColliderSpec[] = [];
+
+  for (const b of buildings) {
+    const half: [number, number, number] = [(b.width / 2) * U, (b.height / 2) * U, (b.depth / 2) * U];
+    out.push({ id: `building:${b.loginLower}`, body: "fixed", pos: [b.position[0] * U, half[1], b.position[2] * U], rotY: 0, shape: { type: "cuboid", half } });
+  }
+  for (const o of objects) out.push(...propColliders(o));
+
+  // Ground and the four edge walls, just outside the terrain rectangle.
+  const w = worldBounds(h);
+  const [x0, x1, z0, z1] = [w.minX * U, w.maxX * U, w.minZ * U, w.maxZ * U];
+  const mx = (x0 + x1) / 2;
+  const mz = (z0 + z1) / 2;
+  const hx = (x1 - x0) / 2;
+  const hz = (z1 - z0) / 2;
+  const t = WALL.thickness / 2;
+  const wh = WALL.height / 2;
+  out.push({ id: `ground:${h}`, body: "fixed", pos: [mx, -1, mz], rotY: 0, shape: { type: "cuboid", half: [hx + 10, 1, hz + 10] } });
+  out.push({ id: `wall-n:${h}`, body: "fixed", pos: [mx, wh, z0 - t], rotY: 0, shape: { type: "cuboid", half: [hx + 2 * t, wh, t] } });
+  // With an entrance, the south wall opens between the portal pillars onto
+  // the approach road, which gets its own ground and walls.
+  const entrance = objects.some((o) => o.px === null && o.item_type === "road" && o.x === 0 && o.z === 0);
+  if (!entrance) {
+    out.push({ id: `wall-s:${h}`, body: "fixed", pos: [mx, wh, z1 + t], rotY: 0, shape: { type: "cuboid", half: [hx + 2 * t, wh, t] } });
+  } else {
+    const gap = (PORTAL.halfSpan - PORTAL.pillar / 2) * U;
+    const side = (x0 - 2 * t + (-gap)) / 2;
+    const sideHalf = (-gap - (x0 - 2 * t)) / 2;
+    out.push({ id: `wall-sw:${h}`, body: "fixed", pos: [side, wh, z1 + t], rotY: 0, shape: { type: "cuboid", half: [sideHalf, wh, t] } });
+    out.push({ id: `wall-se:${h}`, body: "fixed", pos: [-side, wh, z1 + t], rotY: 0, shape: { type: "cuboid", half: [sideHalf, wh, t] } });
+    const len = APPROACH_LOTS * LOT * U;
+    const az = z1 + len / 2;
+    out.push({ id: `approach-ground:${h}`, body: "fixed", pos: [0, -1, az], rotY: 0, shape: { type: "cuboid", half: [gap + 10, 1, len / 2 + 2] } });
+    out.push({ id: `approach-w:${h}`, body: "fixed", pos: [-gap - t, wh, az], rotY: 0, shape: { type: "cuboid", half: [t, wh, len / 2] } });
+    out.push({ id: `approach-e:${h}`, body: "fixed", pos: [gap + t, wh, az], rotY: 0, shape: { type: "cuboid", half: [t, wh, len / 2] } });
+    out.push({ id: `approach-end:${h}`, body: "fixed", pos: [0, wh, z1 + len + t], rotY: 0, shape: { type: "cuboid", half: [gap + 2 * t, wh, t] } });
+  }
+  out.push({ id: `wall-w:${h}`, body: "fixed", pos: [x0 - t, wh, mz], rotY: 0, shape: { type: "cuboid", half: [t, wh, hz + 2 * t] } });
+  out.push({ id: `wall-e:${h}`, body: "fixed", pos: [x1 + t, wh, mz], rotY: 0, shape: { type: "cuboid", half: [t, wh, hz + 2 * t] } });
+  return out;
+}
+
+/** A spec's identity: same key → same body, no rebuild needed. */
+export function colliderKey(c: ColliderSpec): string {
+  return `${c.id}|${c.pos.map((v) => v.toFixed(3)).join(",")}|${c.rotY.toFixed(3)}|${JSON.stringify(c.shape)}`;
+}

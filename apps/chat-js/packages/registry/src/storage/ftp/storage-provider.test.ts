@@ -1,0 +1,37 @@
+import { expect, it, spyOn } from "bun:test";
+
+import { Client } from "basic-ftp";
+
+import { createStorageAdapter } from "./storage-provider";
+
+it("uses TLS for default FTP connections and preserves implicit TLS selection", async () => {
+  const access = spyOn(Client.prototype, "access").mockResolvedValue({
+    code: 220,
+    message: "ready",
+  });
+  const previousSecure = process.env.FTP_SECURE;
+  delete process.env.FTP_SECURE;
+  try {
+    for (const secure of [undefined, "implicit"] as const) {
+      const adapter = createStorageAdapter({ host: "storage.example", secure });
+      const { raw } = adapter;
+      if (raw instanceof Client) {
+        throw new TypeError("Expected a connection factory");
+      }
+      // Each connection mutates the same environment-backed adapter configuration.
+      // eslint-disable-next-line no-await-in-loop
+      const client = await raw.connect();
+      expect(access).toHaveBeenLastCalledWith(
+        expect.objectContaining({ secure: secure ?? true })
+      );
+      client.close();
+    }
+  } finally {
+    access.mockRestore();
+    if (previousSecure === undefined) {
+      delete process.env.FTP_SECURE;
+    } else {
+      process.env.FTP_SECURE = previousSecure;
+    }
+  }
+});

@@ -1,0 +1,235 @@
+import type { GatewayDefinition } from "@chat-js/gateways/definition";
+import { z } from "zod";
+
+import {
+  applyDefaults,
+  configDescriptionSchema,
+} from "../../../../apps/chat/lib/config-schema";
+import { builtInGateways } from "../registry/gateways";
+import type {
+  AuthProvider,
+  BuiltInToolKey,
+  CoreFeatureKey,
+  DocumentTypeKey,
+  Gateway,
+} from "../types";
+
+const defaultsFor = (input: {
+  gateway: string;
+  gatewayDefaults?: GatewayDefinition["defaults"];
+}) => {
+  const defaults =
+    input.gatewayDefaults ??
+    builtInGateways.find((item) => item.meta.chatjs.id === input.gateway)?.meta
+      .chatjs.defaults;
+  if (!defaults) {
+    throw new Error(`Missing registry defaults for gateway ${input.gateway}`);
+  }
+  return defaults;
+};
+
+const extractDescriptions = (
+  schema: z.ZodType,
+  prefix = "",
+  result = new Map<string, string>()
+): Map<string, string> => {
+  if (schema.description && prefix) {
+    result.set(prefix, schema.description);
+  }
+
+  if (schema instanceof z.ZodObject) {
+    const { shape } = schema;
+    for (const [key, propSchema] of Object.entries(shape)) {
+      const path = prefix ? `${prefix}.${key}` : key;
+      extractDescriptions(propSchema as z.ZodType, path, result);
+    }
+  }
+
+  if (schema instanceof z.ZodDiscriminatedUnion) {
+    for (const option of schema.options.values()) {
+      if (option instanceof z.ZodType) {
+        extractDescriptions(option, prefix, result);
+      }
+    }
+  }
+
+  return result;
+};
+
+const descriptions = extractDescriptions(configDescriptionSchema);
+
+const VALID_KEY_REGEX = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/u;
+
+const formatKey = (key: string) =>
+  VALID_KEY_REGEX.test(key) ? key : JSON.stringify(key);
+
+const formatValue = (value: unknown, indent: number): string => {
+  const spaces = "  ".repeat(indent);
+  const inner = "  ".repeat(indent + 1);
+
+  if (value === null || value === undefined) {
+    return "undefined";
+  }
+  if (typeof value === "string") {
+    return JSON.stringify(value);
+  }
+  if (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    Math.abs(value) >= 10_000
+  ) {
+    return String(value).replaceAll(/\d(?=(?:\d{3})+$)/gu, "$&_");
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+
+  if (Array.isArray(value)) {
+    if (value.length === 0) {
+      return "[]";
+    }
+    if (value.every((v) => typeof v === "string")) {
+      return `[${value.map((v) => JSON.stringify(v)).join(", ")}]`;
+    }
+    return `[\n${value
+      .map((v) => `${inner}${formatValue(v, indent + 1)}`)
+      .join(",\n")}\n${spaces}]`;
+  }
+
+  if (typeof value === "object") {
+    const entries = Object.entries(value).toSorted(([left], [right]) =>
+      left.localeCompare(right)
+    );
+    if (entries.length === 0) {
+      return "{}";
+    }
+    return `{\n${entries
+      .map(([k, v]) => `${inner}${formatKey(k)}: ${formatValue(v, indent + 1)}`)
+      .join(",\n")},\n${spaces}}`;
+  }
+
+  return String(value);
+};
+
+const generateConfig = (
+  obj: Record<string, unknown>,
+  indent: number,
+  pathPrefix: string
+): string => {
+  const spaces = "  ".repeat(indent);
+
+  return Object.entries(obj)
+    .toSorted(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => {
+      const path = pathPrefix ? `${pathPrefix}.${key}` : key;
+      const desc = descriptions.get(path);
+      const comment = desc ? `${spaces}// ${desc}\n` : "";
+
+      if (
+        typeof value === "object" &&
+        value !== null &&
+        !Array.isArray(value)
+      ) {
+        const nested = generateConfig(
+          value as Record<string, unknown>,
+          indent + 1,
+          path
+        );
+        return `${comment}${spaces}${formatKey(key)}: {\n${nested}\n${spaces}},`;
+      }
+
+      return `${comment}${spaces}${formatKey(key)}: ${formatValue(value, indent)},`;
+    })
+    .join("\n");
+};
+
+const toConfigInput = (input: {
+  appName: string;
+  appPrefix: string;
+  appUrl: string;
+  withElectron: boolean;
+  gateway: Gateway;
+  gatewayDefaults?: GatewayDefinition["defaults"];
+  coreFeatures: Record<CoreFeatureKey, boolean>;
+  documentTypes: Record<DocumentTypeKey, boolean>;
+  builtInTools: Record<BuiltInToolKey, boolean>;
+  auth: Record<AuthProvider, boolean>;
+}) => ({
+  ai: {
+    gateway: input.gateway,
+    tools: {
+      codeExecution: { enabled: input.builtInTools.codeExecution },
+      deepResearch: { enabled: input.builtInTools.deepResearch },
+      documents: {
+        enabled: input.coreFeatures.documents,
+        types: input.documentTypes,
+      },
+      followupSuggestions: {
+        enabled: input.coreFeatures.followupSuggestions,
+      },
+      image: {
+        enabled: input.builtInTools.imageGeneration,
+      },
+      mcp: { enabled: input.coreFeatures.mcp },
+      urlRetrieval: { enabled: input.builtInTools.urlRetrieval },
+      video: {
+        enabled: input.builtInTools.videoGeneration,
+      },
+      webSearch: { enabled: input.builtInTools.webSearch },
+    },
+  },
+  appName: input.appName,
+  appPrefix: input.appPrefix,
+  appUrl: input.appUrl,
+  authentication: input.auth,
+  desktopApp: {
+    enabled: input.withElectron,
+  },
+  features: {
+    attachments: input.coreFeatures.attachments,
+    parallelResponses: input.coreFeatures.parallelResponses,
+  },
+});
+
+export const buildConfigTs = (input: {
+  appName: string;
+  appPrefix: string;
+  appUrl: string;
+  withElectron: boolean;
+  gateway: Gateway;
+  gatewayDefaults?: GatewayDefinition["defaults"];
+  coreFeatures: Record<CoreFeatureKey, boolean>;
+  documentTypes: Record<DocumentTypeKey, boolean>;
+  builtInTools: Record<BuiltInToolKey, boolean>;
+  auth: Record<AuthProvider, boolean>;
+}): string => {
+  const partial = toConfigInput(input);
+  const { ai, ...appConfig } = partial;
+  const defaults = defaultsFor(input);
+  const toolOverrides: Record<string, object> = ai.tools;
+  const tools = Object.fromEntries(
+    Object.entries(defaults.tools).map(([name, value]) => [
+      name,
+      { ...value, ...toolOverrides[name] },
+    ])
+  );
+  const fullConfig = {
+    ...applyDefaults(appConfig),
+    ai: { ...defaults, ...ai, tools },
+  };
+
+  return `import { defineConfig } from "@/lib/config-schema";
+
+/**
+ * ChatJS Configuration
+ *
+ * Edit this file to customize your app.
+ * @see https://chatjs.dev/docs/reference/config
+ */
+const config = defineConfig({
+${generateConfig(fullConfig, 1, "")}
+});
+
+export default config;
+`;
+};

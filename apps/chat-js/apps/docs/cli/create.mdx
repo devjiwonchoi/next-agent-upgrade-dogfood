@@ -1,0 +1,119 @@
+---
+title: create
+description: Scaffold a new ChatJS application
+---
+
+This is the default command. You can omit the word `create` and pass the directory directly.
+
+```bash
+npx @chat-js/cli@latest create [directory] [options]
+npx @chat-js/cli@latest [directory] [options]
+```
+
+## Arguments
+
+| Argument | Description |
+| --- | --- |
+| `directory` | Target directory for the project. Prompted interactively if omitted. |
+
+## Options
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `-y, --yes` | `false` | Skip all prompts and use defaults (Vercel gateway, GitHub auth, no extra features). |
+| `--code-execution-tool <item>` | Not applicable | Enable code execution with a built-in or external registry item. |
+| `--video-generation-tool <item>` | Not applicable | Enable the built-in `generate-video` tool or an external registry item. |
+| `--image-generation-tool <item>` | Not applicable | Enable the built-in `generate-image` tool or an external registry item. |
+| `--url-retrieval-tool <item>` | Not applicable | Enable URL retrieval with Firecrawl (`retrieve-url`) or an external registry item. |
+| `--search-tool <item>` | Not applicable | Enable web search with a built-in or external registry tool. |
+| `--gateway <name-or-address>` | Vercel | Select a built-in or external registry gateway. |
+| `--from-git <url>` | Not applicable | Clone from a git repository instead of the built-in template. |
+| `--storage-provider <provider>` | Not applicable | Select a built-in storage provider or an external registry item address. |
+| `--storage-config <json>` | Not applicable | Pass non-secret JSON options to the selected adapter. Credentials use env vars. |
+
+## Interactive prompts
+
+When run without `--yes`, the CLI walks you through:
+
+1. **Project name:** the target directory name
+2. **Gateway:** the AI gateway to use (e.g. Vercel AI Gateway, OpenRouter)
+3. **Features:** optional features to enable, followed by provider selection for enabled search, code execution, URL retrieval, image generation, and video generation tools
+4. **File storage:** provider and non-secret adapter options when selected features store files
+5. **Auth providers:** authentication method (e.g. GitHub OAuth)
+6. **Electron desktop app:** optionally adds an `electron/` subfolder to package the app as a native desktop app (see [Desktop](/platforms/desktop))
+
+New apps use the invoking package manager, with Bun as the fallback. The CLI records its version in `package.json`, and shadcn installs dependencies immediately. The former `--no-install`, `--package-manager`, and `--registry` flags are removed.
+
+## What gets generated
+
+The `create` command copies the built-in template and writes a tailored `chat.config.ts` with your selections pre-filled:
+
+```
+my-app/
+├── app/                    # Next.js App Router pages and layouts
+│   ├── (auth)/             # Auth-related routes
+│   ├── (chat)/             # Chat interface routes
+│   ├── api/                # API route handlers
+│   └── layout.tsx
+├── components/             # Shared UI components
+├── hooks/                  # React hooks
+├── lib/                    # Core logic (AI, auth, DB, config schema)
+├── providers/              # React context providers
+├── trpc/                   # tRPC router
+├── chat.config.ts          # Your app configuration (generated)
+├── drizzle.config.ts       # Database schema config
+├── next.config.ts
+├── package.json
+└── tsconfig.json
+```
+
+After scaffolding, the CLI prints the exact environment variables required for your chosen configuration.
+
+## Examples
+
+**Interactive setup (recommended)**
+
+```bash
+npx @chat-js/cli@latest create my-chat-app
+```
+
+**Skip prompts, use all defaults**
+
+```bash
+npx @chat-js/cli@latest create my-chat-app --yes
+```
+
+**Select a gateway**
+
+```bash
+npx @chat-js/cli@latest create my-chat-app --gateway openrouter
+```
+
+**Clone from a custom git repository**
+
+```bash
+npx @chat-js/cli@latest create my-chat-app --from-git https://github.com/your-org/your-fork
+```
+
+**Configure S3 storage without prompts**
+
+```bash
+npx @chat-js/cli@latest create my-chat-app --yes \
+  --storage-provider s3 \
+  --storage-config '{"bucket":"uploads","region":"us-east-1"}'
+```
+
+Keep credentials out of `--storage-config`. The generated `.env.example` and final CLI checklist show the environment requirements for the selected provider. See [File storage](../storage) for details.
+
+**Full flow after scaffolding**
+
+```bash
+npx @chat-js/cli@latest create my-chat-app
+cd my-chat-app
+cp .env.example .env.local
+# Fill in the env vars printed by the CLI
+bun run db:push
+bun run dev
+```
+
+Run `npx @chat-js/cli@latest sync` after a direct shadcn tool installation. For a recognized `--from-git` ChatJS clone, create replaces its selected gateway, storage, search, code-execution, URL retrieval, image generation, and video generation slots and writes a new configuration. Your clone must already support `lib/storage-options.ts` and registry-based image and video tools. Older ChatJS clones receive an upgrade error. Non-ChatJS clones skip ChatJS installation. Existing dependencies in custom clones are retained.

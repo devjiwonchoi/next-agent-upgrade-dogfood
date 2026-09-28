@@ -1,0 +1,24 @@
+{
+  "name": "@repo/og-image",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "next build",
+    "dev": "next dev -p 4200",
+    "start": "next start"
+  },
+  "dependencies": {
+    "@vercel/og": "^1.0.0",
+    "next": "16.2.10",
+    "react": "19.2.7",
+    "react-dom": "19.2.7"
+  },
+  "devDependencies": {
+    "@repo/lint": "workspace:*",
+    "@repo/og-utils": "workspace:*",
+    "@repo/tsconfig": "workspace:*",
+    "@types/node": "^20.4.2",
+    "@types/react": "19.2.17",
+    "typescript": "^5.9.3"
+  }
+}

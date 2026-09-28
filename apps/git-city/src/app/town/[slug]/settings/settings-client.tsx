@@ -1,0 +1,766 @@
+"use client";
+
+import { useState, useTransition, type ReactNode } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import PixelSpinner, { Pending } from "@/components/leagues/PixelSpinner";
+import { Avatar, NO_AUTOFILL } from "@/components/league/hud/shared";
+import { PixelSelect } from "@/components/ui/PixelSelect";
+import type { JoinRequest, League } from "@/lib/leagues/service";
+import { REQUEST_TTL_DAYS, type JoinMode } from "@/lib/towns/joining";
+import type { LeagueMemberRow } from "@/lib/leagues/queries";
+import type { CityIdentity } from "@/lib/league-city/types";
+import { LOGO_MAX_BYTES, SKY_LABELS, SKY_SWATCHES } from "@/lib/league-city/identity";
+
+type Result = { ok: true } | { ok: false; error: string };
+
+async function send(url: string, method: "PATCH" | "DELETE" | "POST", body?: Record<string, string | boolean | number | null>): Promise<Result> {
+  try {
+    const res = await fetch(url, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const json = await res.json().catch(() => ({}));
+    return res.ok ? { ok: true } : { ok: false, error: json.error ?? "Couldn't save." };
+  } catch {
+    return { ok: false, error: "Network error. Try again." };
+  }
+}
+
+function Section({ title, hint, children, danger = false }: { title: string; hint?: string; children: ReactNode; danger?: boolean }) {
+  return (
+    <section className={`border-[3px] bg-bg-card p-4 ${danger ? "border-red-900/70" : "border-border"}`}>
+      <h2 className={`text-sm ${danger ? "text-red-400" : "text-cream"}`}>{title}</h2>
+      {hint && <p className="mt-1 text-[11px] text-muted normal-case">{hint}</p>}
+      <div className="mt-3">{children}</div>
+    </section>
+  );
+}
+
+function ErrorLine({ error }: { error: string | null }) {
+  return error ? <p className="mt-2 text-[11px] text-red-400 normal-case">{error}</p> : null;
+}
+
+export default function SettingsClient({
+  league,
+  members,
+  viewerLogin,
+  inviteLink,
+  requests,
+  requestTotal,
+  identity,
+}: {
+  league: League;
+  members: LeagueMemberRow[];
+  viewerLogin: string;
+  /** Custom leagues: the open invite link (carries the invite token). */
+  inviteLink: string | null;
+  requests: JoinRequest[];
+  requestTotal: number;
+  identity: CityIdentity;
+}) {
+  const router = useRouter();
+  const [refreshing, startRefresh] = useTransition();
+  const api = `/api/leagues/${league.slug}`;
+  const refresh = () => startRefresh(() => router.refresh());
+
+  return (
+    <main className="min-h-screen bg-bg font-pixel uppercase text-warm">
+      <div className="mx-auto max-w-2xl px-4 py-8">
+        <div className="flex items-center justify-between">
+          <Link href={`/town/${league.slug}`} className="text-xs text-muted transition-colors hover:text-cream">
+            &larr; Back to the city
+          </Link>
+          {refreshing && <PixelSpinner size={4} />}
+        </div>
+        <h1 className="mt-6 text-2xl text-cream normal-case">{league.name}</h1>
+        <p className="mt-1 text-[11px] text-muted">Town settings</p>
+
+        <div className="mt-6 space-y-4">
+          {league.kind === "custom" && (league.join_mode === "request" || requestTotal > 0) && (
+            <RequestsSection slug={league.slug} requests={requests} total={requestTotal} onChanged={refresh} />
+          )}
+          {league.kind === "custom" && <NameSection api={api} name={league.name} onSaved={refresh} />}
+          {league.kind === "custom" && <JoinModeSection api={api} mode={league.join_mode} onSaved={refresh} />}
+          <IdentitySection api={api} identity={identity} onSaved={refresh} />
+          {inviteLink && <InviteLinkSection api={api} link={inviteLink} onRotated={refresh} />}
+          <MembersSection league={league} members={members} viewerLogin={viewerLogin} onChanged={refresh} />
+          <TransferSection api={api} league={league} members={members} viewerLogin={viewerLogin} />
+          {league.kind === "custom" && <DeleteSection api={api} name={league.name} />}
+        </div>
+      </div>
+    </main>
+  );
+}
+
+// ─── Name ────────────────────────────────────────────────────
+
+function NameSection({ api, name, onSaved }: { api: string; name: string; onSaved: () => void }) {
+  const [value, setValue] = useState(name);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  const dirty = value.trim() !== name;
+
+  async function save(e: React.FormEvent) {
+    e.preventDefault();
+    if (!dirty || saving) return;
+    setSaving(true);
+    setError(null);
+    const r = await send(api, "PATCH", { name: value });
+    setSaving(false);
+    if (!r.ok) return setError(r.error);
+    setSaved(true);
+    onSaved();
+  }
+
+  return (
+    <Section title="Name">
+      <form onSubmit={save} className="flex gap-2">
+        <input
+          value={value}
+          onChange={(e) => {
+            setValue(e.target.value);
+            setSaved(false);
+          }}
+          maxLength={40}
+          aria-label="Town name"
+          {...NO_AUTOFILL}
+          className="min-w-0 flex-1 border-2 border-border bg-bg-raised px-3 py-2 text-base text-cream normal-case outline-none focus:border-lime sm:text-xs"
+        />
+        <button
+          type="submit"
+          disabled={!dirty || saving}
+          className="btn-press min-w-[80px] border-2 border-lime px-3 py-2 text-[10px] text-lime disabled:opacity-40"
+        >
+          {saving ? <Pending label="Saving" /> : saved && !dirty ? "Saved" : "Save"}
+        </button>
+      </form>
+      <ErrorLine error={error} />
+    </Section>
+  );
+}
+
+// ─── Identity ────────────────────────────────────────────────
+
+function IdentitySection({ api, identity, onSaved }: { api: string; identity: CityIdentity; onSaved: () => void }) {
+  const [file, setFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
+  const [busy, setBusy] = useState<"preview" | "save" | "remove" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [sky, setSky] = useState(identity.sky);
+  const [skySaving, setSkySaving] = useState<number | null>(null);
+
+  async function upload(f: File, save: boolean): Promise<string | null> {
+    const form = new FormData();
+    form.append("file", f);
+    try {
+      const res = await fetch(`${api}/logo${save ? "" : "?preview=1"}`, { method: "POST", body: form });
+      const json = (await res.json().catch(() => ({}))) as { error?: string; preview?: string };
+      if (!res.ok) {
+        setError(json.error ?? "Couldn't read that image.");
+        return null;
+      }
+      return json.preview ?? "saved";
+    } catch {
+      setError("Network error. Try again.");
+      return null;
+    }
+  }
+
+  async function pick(f: File | undefined) {
+    setError(null);
+    setPreview(null);
+    setFile(null);
+    if (!f) return;
+    if (f.size > LOGO_MAX_BYTES) return setError("Logos can be up to 1 MB.");
+    if (!["image/png", "image/jpeg"].includes(f.type)) return setError("Use a PNG or JPG image.");
+    setBusy("preview");
+    const p = await upload(f, false);
+    setBusy(null);
+    if (p) {
+      setFile(f);
+      setPreview(p);
+    }
+  }
+
+  async function save() {
+    if (!file) return;
+    setBusy("save");
+    const ok = await upload(file, true);
+    setBusy(null);
+    if (!ok) return;
+    setFile(null);
+    setPreview(null);
+    onSaved();
+  }
+
+  async function remove() {
+    setBusy("remove");
+    setError(null);
+    const r = await send(`${api}/logo`, "DELETE");
+    setBusy(null);
+    if (!r.ok) return setError(r.error);
+    onSaved();
+  }
+
+  async function pickSky(i: number) {
+    setSkySaving(i);
+    setError(null);
+    const r = await send(`${api}/identity`, "PATCH", { sky: i });
+    setSkySaving(null);
+    if (!r.ok) return setError(r.error);
+    setSky(i);
+    onSaved();
+  }
+
+  const shown = preview ?? identity.logoUrl;
+  return (
+    <Section title="Identity" hint="Your logo goes on billboards, flags and plaza floors, pixelized to 64×64 with 16 colors.">
+      <div className="flex flex-wrap items-start gap-4">
+        <div className="flex h-24 w-24 shrink-0 items-center justify-center border-2 border-border bg-bg-raised">
+          {shown ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={shown} alt="Town logo" width={96} height={96} className="h-full w-full [image-rendering:pixelated]" />
+          ) : (
+            <span className="px-2 text-center text-[9px] text-dim">No logo</span>
+          )}
+        </div>
+        <div className="flex min-w-0 flex-1 flex-col gap-2">
+          {identity.logoRemoved && !preview && (
+            <p className="text-[11px] text-red-400 normal-case">Your logo was taken down after a report. Upload another.</p>
+          )}
+          {preview && <p className="text-[11px] text-cream normal-case">This is how it looks in the city. Save to use it.</p>}
+          <div className="flex flex-wrap gap-2">
+            <label className="btn-press cursor-pointer border-2 border-border px-3 py-2 text-[10px] text-cream hover:border-lime">
+              {busy === "preview" ? <Pending label="Reading" /> : identity.logoUrl || preview ? "Replace" : "Upload logo"}
+              <input type="file" accept="image/png,image/jpeg" className="sr-only" onChange={(e) => pick(e.target.files?.[0])} />
+            </label>
+            {preview && (
+              <button type="button" onClick={save} disabled={busy !== null} className="btn-press border-2 border-lime px-3 py-2 text-[10px] text-lime disabled:opacity-40">
+                {busy === "save" ? <Pending label="Saving" /> : "Save logo"}
+              </button>
+            )}
+            {identity.logoUrl && !preview && (
+              <button type="button" onClick={remove} disabled={busy !== null} className="btn-press border-2 border-border px-3 py-2 text-[10px] text-muted hover:text-red-400 disabled:opacity-40">
+                {busy === "remove" ? <Pending label="Removing" /> : "Remove"}
+              </button>
+            )}
+          </div>
+          <p className="text-[10px] text-dim normal-case">PNG or JPG, up to 1 MB.</p>
+        </div>
+      </div>
+
+      <h3 className="mt-5 text-[11px] text-cream">Sky</h3>
+      <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
+        {SKY_LABELS.map((label, i) => (
+          <button
+            key={label}
+            type="button"
+            aria-pressed={sky === i}
+            disabled={skySaving !== null || sky === i}
+            onClick={() => pickSky(i)}
+            className={`btn-press flex flex-col border-2 text-[10px] ${sky === i ? "border-lime text-lime" : "border-border text-muted hover:text-cream"}`}
+          >
+            <span className="h-10 w-full" style={{ background: `linear-gradient(${SKY_SWATCHES[i].join(", ")})` }} />
+            <span className="px-2 py-1.5">{skySaving === i ? <Pending label="Saving" /> : label}</span>
+          </button>
+        ))}
+      </div>
+      <ErrorLine error={error} />
+    </Section>
+  );
+}
+
+// ─── Invite link ─────────────────────────────────────────────
+
+function InviteLinkSection({ api, link, onRotated }: { api: string; link: string; onRotated: () => void }) {
+  const [copied, setCopied] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [rotating, setRotating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(link);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    } catch {
+      setError("Couldn't copy. Select the link and copy it.");
+    }
+  }
+
+  async function rotate() {
+    setRotating(true);
+    setError(null);
+    const r = await send(api, "PATCH", { rotate_invite: true });
+    setRotating(false);
+    setConfirming(false);
+    if (!r.ok) return setError(r.error);
+    onRotated();
+  }
+
+  return (
+    <Section title="Invite link" hint="Anyone with this link can join. Make a new one to turn the old link off.">
+      <div className="flex gap-2">
+        <input
+          readOnly
+          value={link}
+          aria-label="Invite link"
+          onFocus={(e) => e.currentTarget.select()}
+          className="min-w-0 flex-1 border-2 border-border bg-bg-raised px-3 py-2 text-[11px] text-cream normal-case outline-none"
+        />
+        <button
+          type="button"
+          onClick={copy}
+          className={`btn-press min-w-[80px] px-3 text-[10px] ${copied ? "bg-lime text-bg" : "border-2 border-lime text-lime"}`}
+        >
+          {copied ? "Copied" : "Copy link"}
+        </button>
+      </div>
+      <div className="mt-3 flex items-center gap-2">
+        {confirming ? (
+          <>
+            <span className="text-[9px] text-muted">The old link stops working.</span>
+            <button
+              type="button"
+              disabled={rotating}
+              onClick={rotate}
+              className="btn-press min-w-[96px] border-2 border-red-500 px-2 py-1 text-[9px] text-red-400 disabled:opacity-50"
+            >
+              {rotating ? <Pending label="Making" /> : "New link"}
+            </button>
+            <button type="button" onClick={() => setConfirming(false)} className="px-1 text-[9px] text-muted hover:text-cream">
+              Cancel
+            </button>
+          </>
+        ) : (
+          <button type="button" onClick={() => setConfirming(true)} className="btn-press px-0 py-1 text-[9px] text-muted hover:text-cream">
+            Make a new link
+          </button>
+        )}
+      </div>
+      <ErrorLine error={error} />
+    </Section>
+  );
+}
+
+// ─── Who can join ────────────────────────────────────────────
+
+const JOIN_OPTIONS: { id: JoinMode; label: string; hint: string }[] = [
+  { id: "open", label: "Anyone", hint: "Anyone signed in joins with one click." },
+  { id: "request", label: "Ask first", hint: "Newcomers ask, you let them in." },
+  { id: "invite", label: "Invite only", hint: "Only your invites and your link." },
+];
+
+function JoinModeSection({ api, mode, onSaved }: { api: string; mode: JoinMode; onSaved: () => void }) {
+  const [saving, setSaving] = useState<JoinMode | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function pick(id: JoinMode) {
+    setSaving(id);
+    setError(null);
+    const r = await send(api, "PATCH", { join_mode: id });
+    setSaving(null);
+    if (!r.ok) return setError(r.error);
+    onSaved();
+  }
+
+  return (
+    <Section title="Who can join" hint="Invites and your invite link always work.">
+      <div className="grid gap-2 sm:grid-cols-3">
+        {JOIN_OPTIONS.map((o) => (
+          <button
+            key={o.id}
+            type="button"
+            aria-pressed={mode === o.id}
+            disabled={saving !== null || mode === o.id}
+            onClick={() => pick(o.id)}
+            className={`btn-press border-2 px-3 py-2.5 text-left ${mode === o.id ? "border-lime" : "border-border hover:border-border-light"}`}
+          >
+            <span className={`block text-[10px] ${mode === o.id ? "text-lime" : "text-cream"}`}>
+              {saving === o.id ? <Pending label="Saving" /> : o.label}
+            </span>
+            <span className="mt-1 block text-[10px] text-muted normal-case">{o.hint}</span>
+          </button>
+        ))}
+      </div>
+      <ErrorLine error={error} />
+    </Section>
+  );
+}
+
+// ─── Join requests ───────────────────────────────────────────
+
+function since(iso: string | null): string | null {
+  return iso ? `GitHub since ${new Date(iso).getUTCFullYear()}` : null;
+}
+
+function RequestsSection({
+  slug,
+  requests,
+  total,
+  onChanged,
+}: {
+  slug: string;
+  requests: JoinRequest[];
+  /** All live requests; `requests` holds the oldest 200. */
+  total: number;
+  onChanged: () => void;
+}) {
+  const [limit, setLimit] = useState(PAGE);
+  const visible = requests.slice(0, limit);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function decide(login: string, approve: boolean) {
+    setBusy(`${login}:${approve ? "yes" : "no"}`);
+    setError(null);
+    const r = await send(`/api/leagues/${slug}/requests/${encodeURIComponent(login)}`, "POST", { approve });
+    setBusy(null);
+    if (!r.ok) return setError(r.error);
+    onChanged();
+  }
+
+  return (
+    <div id="requests" className="scroll-mt-6">
+      <Section
+        title={`Join requests${total > 0 ? ` · ${total}` : ""}`}
+        hint={`Declining is quiet: they aren't told. Requests expire after ${REQUEST_TTL_DAYS} days.`}
+      >
+        {requests.length === 0 ? (
+          <p className="text-[11px] text-dim normal-case">No requests right now.</p>
+        ) : (
+          <ul className="max-h-[440px] divide-y-2 divide-border overflow-y-auto border-2 border-border">
+            {visible.map((r) => (
+              <li key={r.login} className="flex items-center gap-3 px-3 py-2">
+                <Avatar src={r.avatar_url} size={24} />
+                <div className="min-w-0 flex-1">
+                  <a
+                    href={`/dev/${r.login}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="block truncate text-[11px] text-cream normal-case hover:text-lime"
+                  >
+                    @{r.login}
+                  </a>
+                  <p className="text-[9px] text-muted">
+                    {[`${r.contributions.toLocaleString("en-US")} contributions`, since(r.account_created_at)].filter(Boolean).join(" · ")}
+                  </p>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={busy !== null}
+                    onClick={() => decide(r.login, true)}
+                    className="btn-press min-w-[76px] bg-lime px-2 py-1.5 text-[9px] text-bg disabled:opacity-50"
+                  >
+                    {busy === `${r.login}:yes` ? <Pending label="Letting in" /> : "Let in"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy !== null}
+                    onClick={() => decide(r.login, false)}
+                    className="btn-press px-2 py-1.5 text-[9px] text-muted hover:text-red-400 disabled:opacity-50"
+                  >
+                    {busy === `${r.login}:no` ? <Pending label="Declining" /> : "Decline"}
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+        {requests.length > visible.length && (
+          <button
+            type="button"
+            onClick={() => setLimit((l) => l + PAGE)}
+            className="btn-press mt-2 w-full border-2 border-border px-3 py-2 text-[10px] text-cream hover:border-lime"
+          >
+            Show {Math.min(PAGE, requests.length - visible.length)} more
+          </button>
+        )}
+        {total > PAGE && (
+          <p className="mt-2 text-[10px] text-muted normal-case">
+            A long line? Set Who can join to Anyone and everyone walks straight in.
+          </p>
+        )}
+        <ErrorLine error={error} />
+      </Section>
+    </div>
+  );
+}
+
+// ─── Members ─────────────────────────────────────────────────
+
+/** Rows rendered per page in the member and request lists. */
+const PAGE = 50;
+
+function MembersSection({
+  league,
+  members,
+  viewerLogin,
+  onChanged,
+}: {
+  league: League;
+  members: LeagueMemberRow[];
+  viewerLogin: string;
+  onChanged: () => void;
+}) {
+  const [confirming, setConfirming] = useState<string | null>(null);
+  const [removing, setRemoving] = useState<string | null>(null);
+  const [copied, setCopied] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [filter, setFilter] = useState<"all" | "active" | "invited">("all");
+  const [query, setQuery] = useState("");
+  const [limit, setLimit] = useState(PAGE);
+  const joined = members.filter((m) => m.status === "active").length;
+  const needle = query.trim().replace(/^@/, "").toLowerCase();
+  const sorted = [...members]
+    .filter((m) => (filter === "all" || m.status === filter) && (!needle || m.login.toLowerCase().includes(needle)))
+    .sort((a, b) => (a.status === b.status ? a.login.localeCompare(b.login) : a.status === "active" ? -1 : 1));
+  const visible = sorted.slice(0, limit);
+
+  async function copyLink(login: string) {
+    const url = `${window.location.origin}/town/${league.slug}?ref=${encodeURIComponent(viewerLogin)}&invite=${encodeURIComponent(login)}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(login);
+      setTimeout(() => setCopied((c) => (c === login ? null : c)), 1800);
+    } catch {
+      setError("Couldn't copy. Copy it from the address bar instead.");
+    }
+  }
+
+  async function remove(login: string) {
+    setRemoving(login);
+    setError(null);
+    const r = await send(`/api/leagues/${league.slug}/members/${encodeURIComponent(login)}`, "DELETE");
+    setRemoving(null);
+    setConfirming(null);
+    if (!r.ok) return setError(r.error);
+    onChanged();
+  }
+
+  return (
+    <Section
+      title={`Members · ${members.length}`}
+      hint={
+        "Removed members leave the city. Only a new invite from you brings them back."
+      }
+    >
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <input
+          {...NO_AUTOFILL}
+          type="search"
+          value={query}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            setLimit(PAGE);
+          }}
+          placeholder="Find a member"
+          aria-label="Find a member"
+          className="min-w-0 flex-1 border-2 border-border bg-bg-raised px-3 py-2 text-base text-cream normal-case outline-none placeholder:text-dim focus:border-lime sm:text-[11px]"
+        />
+        <div className="flex border-2 border-border" role="group" aria-label="Show">
+          {(
+            [
+              ["all", `All ${members.length}`],
+              ["active", `Joined ${joined}`],
+              ["invited", `Invited ${members.length - joined}`],
+            ] as const
+          ).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              aria-pressed={filter === id}
+              onClick={() => {
+                setFilter(id);
+                setLimit(PAGE);
+              }}
+              className={`px-2.5 py-2 text-[9px] ${filter === id ? "bg-lime text-bg" : "text-muted hover:text-cream"}`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+      {sorted.length === 0 && <p className="text-[11px] text-dim normal-case">No member matches that.</p>}
+      <ul className={`max-h-[440px] divide-y-2 divide-border overflow-y-auto border-2 border-border ${sorted.length === 0 ? "hidden" : ""}`}>
+        {visible.map((m) => {
+          const me = m.login === viewerLogin;
+          return (
+            <li key={m.developer_id} className="flex items-center gap-3 px-3 py-2">
+              <Avatar src={m.avatar_url} size={24} faded={m.status === "invited"} />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-[11px] text-cream normal-case">
+                  @{m.login}
+                  {me && <span className="ml-2 text-[9px] text-lime uppercase">Admin</span>}
+                </p>
+                <p className={`text-[9px] ${m.status === "active" ? "text-muted" : "text-dim"}`}>
+                  {m.status === "active" ? (m.verification ? `Joined · ${m.verification} verification` : "Joined") : "Invited · not joined yet"}
+                </p>
+              </div>
+              {confirming === m.login ? (
+                <div className="flex shrink-0 items-center gap-2">
+                  <span className="text-[9px] text-muted">Remove?</span>
+                  <button
+                    type="button"
+                    disabled={removing !== null}
+                    onClick={() => remove(m.login)}
+                    className="btn-press min-w-[72px] border-2 border-red-500 px-2 py-1 text-[9px] text-red-400 disabled:opacity-50"
+                  >
+                    {removing === m.login ? <Pending label="Removing" /> : "Remove"}
+                  </button>
+                  <button type="button" onClick={() => setConfirming(null)} className="px-1 text-[9px] text-muted hover:text-cream">
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <div className="flex shrink-0 items-center gap-2">
+                  {m.status === "invited" && (
+                    <button
+                      type="button"
+                      onClick={() => copyLink(m.login)}
+                      className="btn-press min-w-[76px] border-2 border-border px-2 py-1 text-[9px] text-cream hover:border-lime"
+                    >
+                      {copied === m.login ? "Copied" : "Copy link"}
+                    </button>
+                  )}
+                  {!me && (
+                    <button
+                      type="button"
+                      onClick={() => setConfirming(m.login)}
+                      className="btn-press px-2 py-1 text-[9px] text-muted hover:text-red-400"
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+      {sorted.length > visible.length && (
+        <button
+          type="button"
+          onClick={() => setLimit((l) => l + PAGE)}
+          className="btn-press mt-2 w-full border-2 border-border px-3 py-2 text-[10px] text-cream hover:border-lime"
+        >
+          Show {Math.min(PAGE, sorted.length - visible.length)} more · {sorted.length - visible.length} left
+        </button>
+      )}
+      <ErrorLine error={error} />
+    </Section>
+  );
+}
+
+// ─── Transfer admin ──────────────────────────────────────────
+
+function TransferSection({
+  api,
+  league,
+  members,
+  viewerLogin,
+}: {
+  api: string;
+  league: League;
+  members: LeagueMemberRow[];
+  viewerLogin: string;
+}) {
+  const router = useRouter();
+  const candidates = members.filter(
+    (m) => m.status === "active" && m.login !== viewerLogin && (league.kind === "custom" || m.verification),
+  );
+  const [target, setTarget] = useState(candidates[0]?.login ?? "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function transfer(e: React.FormEvent) {
+    e.preventDefault();
+    if (!target || saving) return;
+    setSaving(true);
+    setError(null);
+    const r = await send(api, "PATCH", { admin_login: target });
+    if (!r.ok) {
+      setSaving(false);
+      return setError(r.error);
+    }
+    // No longer admin: back to the city.
+    router.push(`/town/${league.slug}`);
+  }
+
+  return (
+    <Section title="Transfer admin" hint="The new admin gets these settings. You stay a member.">
+      {candidates.length === 0 ? (
+        <p className="text-[11px] text-dim normal-case">
+          {league.kind === "company" ? "Nobody else has verified yet." : "Nobody else has joined yet."}
+        </p>
+      ) : (
+        <form onSubmit={transfer} className="flex flex-wrap gap-2">
+          <PixelSelect
+            value={target}
+            onChange={setTarget}
+            ariaLabel="New admin"
+            searchable={candidates.length > 8}
+            searchPlaceholder="Find a member"
+            className="min-w-0 flex-1"
+            options={candidates.map((m) => ({ value: m.login, label: `@${m.login}` }))}
+          />
+          <button type="submit" disabled={saving || !target} className="btn-press min-w-[100px] border-2 border-border px-3 py-2 text-[10px] text-cream hover:border-lime disabled:opacity-50">
+            {saving ? <Pending label="Moving" /> : "Transfer"}
+          </button>
+        </form>
+      )}
+      <ErrorLine error={error} />
+    </Section>
+  );
+}
+
+// ─── Delete ──────────────────────────────────────────────────
+
+function DeleteSection({ api, name }: { api: string; name: string }) {
+  const router = useRouter();
+  const [value, setValue] = useState("");
+  const [deleting, setDeleting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const matches = value.trim().toLowerCase() === name.trim().toLowerCase();
+
+  async function del(e: React.FormEvent) {
+    e.preventDefault();
+    if (!matches || deleting) return;
+    setDeleting(true);
+    setError(null);
+    const r = await send(api, "DELETE", { confirm: value });
+    if (!r.ok) {
+      setDeleting(false);
+      return setError(r.error);
+    }
+    router.push("/towns");
+  }
+
+  return (
+    <Section title="Delete town" hint="Removes the city, the members and the hall of fame. This can't be undone." danger>
+      <form onSubmit={del} className="flex flex-wrap gap-2">
+        <input
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          placeholder={name}
+          aria-label={`Type ${name} to confirm`}
+          {...NO_AUTOFILL}
+          className="min-w-0 flex-1 border-2 border-border bg-bg-raised px-3 py-2 text-base text-cream normal-case outline-none focus:border-red-500 sm:text-xs"
+        />
+        <button
+          type="submit"
+          disabled={!matches || deleting}
+          className="btn-press min-w-[100px] border-2 border-red-500 px-3 py-2 text-[10px] text-red-400 disabled:opacity-40"
+        >
+          {deleting ? <Pending label="Deleting" /> : "Delete"}
+        </button>
+      </form>
+      <p className="mt-2 text-[10px] text-dim normal-case">Type the town name to confirm.</p>
+      <ErrorLine error={error} />
+    </Section>
+  );
+}

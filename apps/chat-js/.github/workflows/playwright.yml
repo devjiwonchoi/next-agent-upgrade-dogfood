@@ -1,0 +1,106 @@
+name: Playwright
+
+on:
+  pull_request:
+
+concurrency:
+  group: playwright-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  playwright:
+    name: Playwright
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: chatjs_ci
+          POSTGRES_USER: chatjs
+          POSTGRES_PASSWORD: chatjs
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U chatjs -d chatjs_ci" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      # CI owns an ephemeral database; never spend shared Neon transfer on tests.
+      CI_PLAYWRIGHT: "true"
+      AUTH_SECRET: ${{ secrets.AUTH_SECRET }}
+      DATABASE_URL: postgres://chatjs:chatjs@127.0.0.1:5432/chatjs_ci
+      WORKFLOW_POSTGRES_URL: postgres://chatjs:chatjs@127.0.0.1:5432/chatjs_ci
+      EVE_GATEWAY_SECRET: playwright-isolated-eve-gateway-secret
+      EVE_INTERNAL_ORIGIN: http://localhost:3000
+      BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Check affected
+        id: affected
+        shell: bash
+        env:
+          TURBO_SCM_BASE: ${{ github.event.pull_request.base.sha }}
+          TURBO_SCM_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          TURBO_VERSION="$(node -p "require('./package.json').devDependencies.turbo")"
+          if npx -y "turbo@${TURBO_VERSION}" query affected --tasks test:e2e --exit-code >/tmp/playwright-query.json 2>/tmp/playwright-query.log; then
+            echo "run=false" >>"$GITHUB_OUTPUT"
+          else
+            status=$?
+            if [ "$status" -eq 1 ]; then
+              echo "run=true" >>"$GITHUB_OUTPUT"
+            else
+              cat /tmp/playwright-query.log
+              cat /tmp/playwright-query.json
+              exit "$status"
+            fi
+          fi
+      - uses: oven-sh/setup-bun@v2
+        if: steps.affected.outputs.run == 'true'
+        with:
+          bun-version: 1.3.1
+      - uses: actions/cache@v4
+        if: steps.affected.outputs.run == 'true'
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('**/bun.lock') }}
+          restore-keys: ${{ runner.os }}-bun-
+      - if: steps.affected.outputs.run == 'true'
+        run: bun install --frozen-lockfile
+      - name: Migrate isolated test database
+        if: steps.affected.outputs.run == 'true'
+        run: bun run --cwd apps/chat db:migrate
+      - name: Bootstrap isolated EVE workflow database
+        if: steps.affected.outputs.run == 'true'
+        run: bun run --cwd apps/chat eve:setup
+      - uses: actions/cache@v4
+        if: steps.affected.outputs.run == 'true'
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('**/bun.lock') }}
+      - name: Install Playwright browsers
+        if: steps.affected.outputs.run == 'true' && steps.playwright-cache.outputs.cache-hit != 'true'
+        run: apps/chat/node_modules/.bin/playwright install --with-deps chromium
+      - if: steps.affected.outputs.run == 'true'
+        env:
+          TURBO_SCM_BASE: ${{ github.event.pull_request.base.sha }}
+          TURBO_SCM_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: bunx turbo run test:e2e --affected
+      - name: Test conversation presentation
+        if: steps.affected.outputs.run == 'true'
+        working-directory: apps/chat
+        run: bunx playwright test --config playwright.eve-presentation.config.ts
+      - uses: actions/upload-artifact@v4
+        if: steps.affected.outputs.run == 'true' && always() && !cancelled()
+        with:
+          name: playwright-report
+          path: |
+            apps/chat/playwright-report/
+            apps/chat/tests/eve-results/presentation/
+          retention-days: 7

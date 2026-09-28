@@ -1,0 +1,194 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "futureFlags": {
+    "affectedUsingTaskInputs": true
+  },
+  "globalEnv": [
+    "DATABASE_URL",
+    "DATABASE_MIGRATION_URL",
+    "EVE_INTERNAL_ORIGIN",
+    "EVE_GATEWAY_SECRET",
+    "WORKFLOW_POSTGRES_URL",
+    "AUTH_SECRET",
+    "BLOB_READ_WRITE_TOKEN",
+    "AUTH_GOOGLE_ID",
+    "AUTH_GOOGLE_SECRET",
+    "AUTH_GITHUB_ID",
+    "AUTH_GITHUB_SECRET",
+    "VERCEL_APP_CLIENT_ID",
+    "VERCEL_APP_CLIENT_SECRET",
+    "AI_GATEWAY_API_KEY",
+    "VERCEL_OIDC_TOKEN",
+    "OPENROUTER_API_KEY",
+    "OPENAI_COMPATIBLE_BASE_URL",
+    "OPENAI_COMPATIBLE_API_KEY",
+    "OPENAI_API_KEY",
+    "CRON_SECRET",
+    "TAVILY_API_KEY",
+    "EXA_API_KEY",
+    "FIRECRAWL_API_KEY",
+    "MCP_ENCRYPTION_KEY",
+    "VERCEL_TEAM_ID",
+    "VERCEL_PROJECT_ID",
+    "VERCEL_TOKEN",
+    "VERCEL_SANDBOX_RUNTIME",
+    "APP_URL",
+    "ELECTRON_APP_URL",
+    "PORT",
+    "VERCEL",
+    "VERCEL_ENV",
+    "NODE_ENV",
+    "VERCEL_URL",
+    "PLAYWRIGHT",
+    "CI_PLAYWRIGHT",
+    "PLAYWRIGHT_TEST_BASE_URL",
+    "TRUSTED_CLIENT_IP_HEADER"
+  ],
+  "tasks": {
+    "dev": {
+      "dependsOn": ["^build"],
+      "cache": false,
+      "persistent": true
+    },
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": [".next/**", "dist/**", "build/**"]
+    },
+    "format": {
+      "cache": false
+    },
+    "lint": {
+      "dependsOn": ["^lint"]
+    },
+    "test": {
+      "dependsOn": ["^test"],
+      "outputs": ["playwright-report/**", "test-results/**"]
+    },
+    "test:unit": {
+      "dependsOn": ["^test:unit"]
+    },
+    "test:types": {
+      "dependsOn": ["^test:types"]
+    },
+    "docs:links": {
+      "cache": false
+    },
+    "fetch:models": {
+      "cache": false
+    },
+    "test:e2e": {
+      "dependsOn": ["^build"],
+      "cache": false
+    },
+    "electron:build": {
+      "cache": true,
+      "inputs": [
+        "src/**",
+        "package.json",
+        "tsconfig.json",
+        "icon.png",
+        "scripts/**"
+      ],
+      "outputs": ["dist/**", "build/**"]
+    },
+    "electron:dev": {
+      "cache": false,
+      "persistent": true
+    },
+    "electron:publish": {
+      "cache": false,
+      "dependsOn": ["electron:build"]
+    },
+    "electron:make": {
+      "cache": false,
+      "dependsOn": ["electron:build"]
+    },
+    "@chat-js/cli#build": {
+      "dependsOn": ["^build"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/apps/chat/**",
+        "$TURBO_ROOT$/apps/electron/**",
+        "$TURBO_ROOT$/scripts/sync-template.ts",
+        "$TURBO_ROOT$/patches/*.patch",
+        "$TURBO_ROOT$/scripts/sync-template-snapshot.ts",
+        "$TURBO_ROOT$/package.json",
+        "!$TURBO_ROOT$/apps/{chat,electron}/**/{node_modules,.next,.eve,.output,.turbo,build,dist,release,out,playwright,playwright-report,test-results,eve-results,blob-report}/**",
+        "!$TURBO_ROOT$/apps/{chat,electron}/**/{.env,.env.*.local,.env.local,.DS_Store,*.tsbuildinfo,bun.lock,bun.lockb}",
+        "!$TURBO_ROOT$/apps/electron/branding.json",
+        "$TURBO_ROOT$/packages/registry/{registry.ts,metadata.ts,package.json}",
+        "$TURBO_ROOT$/packages/registry/src/**",
+        "$TURBO_ROOT$/packages/registry/build.ts"
+      ],
+      "outputs": ["dist/**", "templates/**"]
+    },
+    "@chat-js/cli#test:unit": {
+      "dependsOn": ["build"],
+      "outputs": ["templates/**"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/apps/chat/**",
+        "$TURBO_ROOT$/apps/electron/**",
+        "$TURBO_ROOT$/scripts/sync-template.ts",
+        "$TURBO_ROOT$/patches/*.patch",
+        "$TURBO_ROOT$/scripts/sync-template-snapshot.ts",
+        "$TURBO_ROOT$/package.json",
+        "!$TURBO_ROOT$/apps/{chat,electron}/**/{node_modules,.next,.eve,.output,.turbo,build,dist,release,out,playwright,playwright-report,test-results,eve-results,blob-report}/**",
+        "!$TURBO_ROOT$/apps/{chat,electron}/**/{.env,.env.*.local,.env.local,.DS_Store,*.tsbuildinfo,bun.lock,bun.lockb}",
+        "!$TURBO_ROOT$/apps/electron/branding.json",
+        "$TURBO_ROOT$/packages/registry/{registry.ts,metadata.ts,package.json}",
+        "$TURBO_ROOT$/packages/registry/src/**",
+        "$TURBO_ROOT$/packages/registry/build.ts"
+      ]
+    },
+    "@chat-js/cli#test:scaffold": {
+      "dependsOn": ["test:unit"],
+      "cache": false,
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/.github/workflows/cli-scaffold.yml",
+        "$TURBO_ROOT$/bun.lock"
+      ]
+    },
+    "@chat-js/registry#test:unit": {
+      "dependsOn": ["^test:unit"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/apps/chat/**",
+        "!$TURBO_ROOT$/apps/chat/**/{node_modules,.next,.eve,.output,.turbo,playwright-report,test-results,eve-results}/**",
+        "!$TURBO_ROOT$/apps/chat/**/{.env*,*.tsbuildinfo}"
+      ]
+    },
+    "@chat-js/registry#test:types": {
+      "dependsOn": ["^test:types"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/apps/chat/**",
+        "!$TURBO_ROOT$/apps/chat/**/{node_modules,.next,.eve,.output,.turbo,playwright-report,test-results,eve-results}/**",
+        "!$TURBO_ROOT$/apps/chat/**/{.env*,*.tsbuildinfo}"
+      ]
+    },
+    "@chat-js/cli#test:types": {
+      "dependsOn": ["^test:types"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/apps/chat/**",
+        "$TURBO_ROOT$/apps/electron/**",
+        "$TURBO_ROOT$/scripts/sync-template.ts",
+        "$TURBO_ROOT$/patches/*.patch",
+        "$TURBO_ROOT$/scripts/sync-template-snapshot.ts",
+        "$TURBO_ROOT$/package.json",
+        "!$TURBO_ROOT$/apps/{chat,electron}/**/{node_modules,.next,.eve,.output,.turbo,build,dist,release,out,playwright,playwright-report,test-results,eve-results,blob-report}/**",
+        "!$TURBO_ROOT$/apps/{chat,electron}/**/{.env,.env.*.local,.env.local,.DS_Store,*.tsbuildinfo,bun.lock,bun.lockb}",
+        "!$TURBO_ROOT$/apps/electron/branding.json",
+        "$TURBO_ROOT$/packages/registry/{registry.ts,metadata.ts,package.json}",
+        "$TURBO_ROOT$/packages/registry/src/**",
+        "$TURBO_ROOT$/packages/registry/build.ts"
+      ]
+    },
+    "@chat-js/thread#test:types": {
+      "dependsOn": ["^test:types"],
+      "outputs": ["dist/**"]
+    }
+  }
+}

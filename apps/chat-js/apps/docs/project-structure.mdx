@@ -1,0 +1,169 @@
+---
+title: "Project Structure"
+description: "How ChatJS is organized"
+---
+
+## Directory Overview
+
+```
+├── app/                    # Next.js App Router
+│   ├── (auth)/            # Auth routes (login, register)
+│   ├── (chat)/            # Main chat interface
+│   ├── api/               # API routes (EVE gateway, auth, tRPC)
+│   └── actions/           # Server Actions
+│
+├── components/
+│   ├── ai-elements/       # AI Elements registry components
+│   ├── chat/              # Chat UI components
+│   ├── part/              # Tool part renderers
+│   ├── settings/          # Settings pages
+│   └── ui/                # shadcn/ui components
+│
+├── lib/
+│   ├── ai/                # AI SDK integration, tools, prompts
+│   │   └── gateways/      # Gateway abstraction (Vercel, OpenRouter)
+│   ├── db/                # Database schema, queries, and data access
+│   ├── eve/               # EVE runtime integration
+│   ├── models/            # Model types and utilities
+│   └── artifacts/         # Client helpers for document artifacts
+│
+├── agent/                  # EVE agent channels, hooks, and tools
+├── trpc/                   # tRPC routers and procedures
+├── hooks/                  # React hooks
+├── providers/              # React context providers
+├── evals/                  # AI evaluation tests
+└── scripts/                # Build and dev scripts
+```
+
+## Key Files
+
+| File | Purpose |
+| --- | --- |
+| `chat.config.ts` | Central configuration (features, models, branding) |
+| `lib/config.ts` | Parsed config export with defaults |
+| `lib/env.ts` | Environment variable validation (t3-env) |
+| `lib/storage-provider.ts` | Selected Files SDK adapter and non-secret options |
+| `lib/file-storage.ts` | Provider-agnostic file operations |
+| `lib/auth.ts` | Better Auth server configuration |
+| `lib/auth-client.ts` | Better Auth client configuration |
+| `lib/db/schema.ts` | Drizzle ORM database schema |
+| `proxy.ts` | Route protection middleware |
+
+## App Router Structure
+
+### Route Groups
+
+- `(auth)` - Authentication pages, shared layout without chat UI
+- `(chat)` - Main application, chat interface layout
+
+### API Routes
+
+```
+app/api/
+├── auth/[...all]/    # Better Auth handler
+├── eve/[...path]/    # Authenticated EVE gateway
+├── agent-conversations/ # Conversation metadata operations
+├── trpc/[trpc]/      # tRPC handler
+└── cron/             # Scheduled tasks
+```
+
+## Components Architecture
+
+### UI Layer
+
+```
+components/
+├── ui/               # Base components (shadcn/ui)
+│   └── extra/        # Local tweaks on shadcn components
+├── ai-elements/      # AI Elements components
+│   └── extra/        # Local tweaks on AI Elements
+├── chat/             # Chat-specific components
+└── part/             # Tool result renderers
+```
+
+### Part Components
+
+Shared message and tool presentation lives in `components/part/`. Installed tools can also provide their own renderers:
+
+```
+components/part/
+├── web-search.tsx
+├── document-common.tsx
+└── ...
+```
+
+See [Tool Part Pattern](/cookbook/tool-part) for implementation details.
+
+## Library Structure
+
+### AI Integration
+
+```text
+lib/ai/
+├── active-gateway.ts   # Active gateway selection
+├── gateways/registry.ts # Installed gateway registry
+├── models.ts          # Model fetching and caching
+├── models.generated.ts # Fallback model list
+├── installed-tools.ts # Installed tool wiring
+└── prompts.ts         # Shared prompts
+```
+
+EVE agent instructions, hooks, and tool integration live in `agent/`. Installed tools live in `tools/chatjs/`, with application support in `tools/platform/`.
+
+### Data Layer
+
+```
+lib/
+├── db/
+│   ├── schema.ts      # Drizzle schema
+│   ├── queries.ts     # Database queries for application metadata
+│   ├── eve-queries.ts # EVE conversation metadata and ownership queries
+│   ├── credits.ts     # Credit balance queries
+│   └── client.ts      # Database connection
+├── eve/               # Gateway, message, copy, and lifecycle contracts
+└── artifacts/         # Client artifact metadata helpers
+```
+
+## Configuration Flow
+
+```
+chat.config.ts        # Define features, models, branding
+       ↓
+lib/config.ts          # Parse defaults and export config
+       ↓
+lib/env.ts             # Validate environment variables
+       ↓
+Runtime                # Features toggle based on config + env
+```
+
+## Data Flow
+
+```
+Browser UI or EVE gateway
+       ↓
+ChatJS metadata procedure
+       ↓
+Database Queries (lib/db/)
+       ↓
+Drizzle ORM
+       ↓
+PostgreSQL
+```
+
+## AI Streaming Flow
+
+```
+Chat UI (EVE React integration)
+       ↓
+Authenticated ChatJS gateway
+       ↓
+EVE runtime and event stream
+       ↓
+Gateway Abstraction → Provider (OpenAI, Anthropic, etc.)
+       ↓
+Stream response with tool calls
+       ↓
+Tool execution (if needed)
+       ↓
+Client renders parts
+```

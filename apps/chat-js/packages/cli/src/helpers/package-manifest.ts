@@ -1,0 +1,198 @@
+import { execFileSync } from "node:child_process";
+import { tmpdir } from "node:os";
+
+import type { PackageManager } from "../types";
+
+type DependencyMap = Record<string, string>;
+type ScriptMap = Record<string, string>;
+
+type PackageJson = {
+  type?: "module" | "commonjs";
+  packageManager?: string;
+  scripts?: ScriptMap;
+  dependencies?: DependencyMap;
+  devDependencies?: DependencyMap;
+  overrides?: Record<string, unknown>;
+};
+
+const ESBUILD_VERSION = "^0.28.0";
+const BETTER_AUTH_PACKAGES = [
+  "@better-auth/core",
+  "@better-auth/electron",
+  "better-auth",
+] as const;
+
+const toExactVersion = (range: string): string => range.replace(/^[~^]/u, "");
+
+const resolveBetterAuthVersion = (packageJson: PackageJson): string | null => {
+  for (const dependencyGroup of [
+    packageJson.dependencies,
+    packageJson.devDependencies,
+  ]) {
+    if (!dependencyGroup) {
+      continue;
+    }
+
+    for (const packageName of BETTER_AUTH_PACKAGES) {
+      const version = dependencyGroup[packageName];
+      if (version) {
+        return toExactVersion(version);
+      }
+    }
+  }
+
+  return null;
+};
+
+const pinBetterAuthVersions = (
+  dependencyGroup: DependencyMap | undefined,
+  version: string
+): void => {
+  if (!dependencyGroup) {
+    return;
+  }
+
+  for (const packageName of BETTER_AUTH_PACKAGES) {
+    if (dependencyGroup[packageName]) {
+      dependencyGroup[packageName] = version;
+    }
+  }
+};
+
+const normalizeChatAppScripts = (scripts: ScriptMap): void => {
+  scripts.prebuild = "tsx scripts/check-env.ts";
+  scripts.dev = "tsx scripts/check-env.ts && next dev";
+  scripts["dev:inspect"] = "tsx scripts/check-env.ts && next dev --inspect";
+  scripts.build =
+    "tsx lib/db/migrate.ts --deployment && eve build && next build";
+  scripts.prod =
+    "tsx scripts/check-env.ts && tsx lib/db/migrate.ts && eve build && next build && next start";
+  scripts.lint = "ultracite check";
+  scripts.format = "oxfmt --write .";
+  scripts["check-env"] = "tsx scripts/check-env.ts";
+  scripts["db:connect"] = "tsx scripts/check-db.ts";
+  scripts["db:migrate"] = "tsx lib/db/migrate.ts";
+  for (const name of Object.keys(scripts)) {
+    if (
+      name.startsWith("db:branch:") ||
+      name === "dev:neon" ||
+      name === "db:migrate:neon"
+    ) {
+      Reflect.deleteProperty(scripts, name);
+    }
+  }
+  scripts.test =
+    "export PLAYWRIGHT=True && playwright test --workers=4 && vitest run";
+  scripts["test:e2e"] = "export PLAYWRIGHT=True && playwright test --workers=4";
+  scripts["ai:devtools"] = "npx @ai-sdk/devtools";
+  scripts["fetch:models"] = "tsx scripts/fetch-models.ts && oxfmt --write .";
+};
+
+const normalizeElectronScripts = (scripts: ScriptMap): void => {
+  const prebuild =
+    "tsx scripts/write-branding.ts && tsx scripts/generate-icons.ts";
+  const build =
+    "esbuild src/main.ts --bundle --platform=node --format=cjs --outfile=dist/main.js --external:electron --external:electron-updater --alias:@=.. && esbuild src/preload.ts --bundle --platform=browser --format=cjs --outfile=dist/preload.js --external:electron --alias:@=..";
+
+  scripts.forge = "node ./scripts/run-forge.cjs";
+  scripts["generate-icons"] = "tsx scripts/generate-icons.ts";
+  scripts.prebuild = prebuild;
+  scripts.build = build;
+  scripts.start = "node ./scripts/run-forge.cjs start";
+  scripts.dev = "node ./scripts/run-forge.cjs start";
+  scripts.package = "node ./scripts/run-forge.cjs package";
+  scripts.make = "node ./scripts/run-forge.cjs make";
+  scripts["make:mac"] =
+    "node ./scripts/run-forge.cjs make --platform=darwin --arch=universal";
+  scripts["make:win"] =
+    "node ./scripts/run-forge.cjs make --platform=win32 --arch=x64";
+  scripts["make:linux"] =
+    "node ./scripts/run-forge.cjs make --platform=linux --arch=x64";
+  scripts.publish = "node ./scripts/run-forge.cjs publish";
+  scripts["electron:build"] = build;
+  scripts["electron:dev"] = scripts.dev;
+  scripts["electron:make"] = scripts.make;
+  scripts["electron:publish"] = scripts.publish;
+  delete scripts["dist:mac"];
+  delete scripts["dist:win"];
+  delete scripts["dist:linux"];
+  delete scripts["publish:mac"];
+  delete scripts["publish:win"];
+};
+
+const normalizeElectronDevDependencies = (
+  devDependencies: DependencyMap | undefined,
+  tsxVersion?: string
+): void => {
+  if (!devDependencies) {
+    return;
+  }
+
+  devDependencies.esbuild = ESBUILD_VERSION;
+  if (tsxVersion) {
+    devDependencies.tsx = tsxVersion;
+  }
+};
+
+export const normalizeScaffoldedPackageJson = (
+  packageJson: PackageJson,
+  options?: {
+    packageManager?: PackageManager;
+    persistPackageManager?: boolean;
+    template?: "chat-app" | "electron";
+    tsxVersion?: string;
+  }
+): PackageJson => {
+  const betterAuthVersion = resolveBetterAuthVersion(packageJson);
+
+  if (betterAuthVersion) {
+    pinBetterAuthVersions(packageJson.dependencies, betterAuthVersion);
+    pinBetterAuthVersions(packageJson.devDependencies, betterAuthVersion);
+    packageJson.overrides = {
+      ...packageJson.overrides,
+      "@better-auth/core": betterAuthVersion,
+    };
+  }
+
+  switch (options?.template) {
+    case "chat-app": {
+      packageJson.type = "module";
+      if (packageJson.scripts) {
+        normalizeChatAppScripts(packageJson.scripts);
+      }
+      break;
+    }
+    case "electron": {
+      if (packageJson.scripts) {
+        normalizeElectronScripts(packageJson.scripts);
+      }
+      normalizeElectronDevDependencies(
+        packageJson.devDependencies,
+        options?.tsxVersion
+      );
+      break;
+    }
+    default: {
+      break;
+    }
+  }
+
+  if (options?.persistPackageManager !== false) {
+    const packageManager = options?.packageManager ?? "bun";
+    const launcherVersion = process.env.npm_config_user_agent?.match(
+      new RegExp(`^${packageManager}/([0-9]+\\.[0-9]+\\.[0-9]+)`, "u")
+    )?.[1];
+    const version =
+      launcherVersion ??
+      execFileSync(packageManager, ["--version"], {
+        cwd: tmpdir(),
+        encoding: "utf-8",
+      }).trim();
+    if (!/^\d+\.\d+\.\d+/u.test(version)) {
+      throw new Error(`Cannot determine ${packageManager} version.`);
+    }
+    packageJson.packageManager = `${packageManager}@${version}`;
+  }
+
+  return packageJson;
+};
