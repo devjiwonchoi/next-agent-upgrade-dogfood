@@ -1,5 +1,5 @@
 "use client";
-import { useEffect } from "react";
+import { useEffect, type JSX } from "react";
 import { useSetDefaultScale } from "components/Resume/hooks";
 import {
   MagnifyingGlassIcon,
