@@ -1,0 +1,88 @@
+import { parseOpenAPI, parseWebhookOpenAPI } from '@/lib/openapi';
+import { isSmartRouteHandler } from '@/route-handlers/smart-route-handler';
+import { webhookEvents } from '@hexclave/shared/dist/interface/webhooks';
+import { writeFileSyncIfChanged } from '@hexclave/shared/dist/utils/fs';
+import { HTTP_METHODS } from '@hexclave/shared/dist/utils/http';
+import { typedKeys } from '@hexclave/shared/dist/utils/objects';
+import { stringCompare } from '@hexclave/shared/dist/utils/strings';
+import fs from 'fs';
+import { glob } from 'glob';
+import path from 'path';
+
+
+async function main() {
+  console.log("Started Mintlify OpenAPI schema generator");
+
+  const mintlifyOpenApiDir = path.resolve("../../docs-mintlify/openapi");
+
+  if (!fs.existsSync(mintlifyOpenApiDir)) {
+    console.log('Creating Mintlify OpenAPI directory...');
+    fs.mkdirSync(mintlifyOpenApiDir, { recursive: true });
+  }
+
+  // Generate OpenAPI specs for each audience (let parseOpenAPI handle the filtering)
+  const filePathPrefix = path.resolve(process.platform === "win32" ? "apps/src/app/api/latest" : "src/app/api/latest");
+  const importPathPrefix = "@/app/api/latest";
+  const filePaths = [...await glob(filePathPrefix + "/**/route.{js,jsx,ts,tsx}")].sort((a, b) => stringCompare(a, b));
+
+  const endpoints = new Map(await Promise.all(filePaths.map(async (filePath) => {
+    if (!filePath.startsWith(filePathPrefix)) {
+      throw new Error(`Invalid file path: ${filePath}`);
+    }
+    const suffix = filePath.slice(filePathPrefix.length);
+    const midfix = suffix.slice(0, suffix.lastIndexOf("/route."));
+    const importPath = `${importPathPrefix}${suffix}`;
+    const urlPathRaw = midfix.replaceAll("[", "{").replaceAll("]", "}").replaceAll(/\/\(.*\)/g, "");
+    // OpenAPI path keys must not be empty (Mintlify and other tooling reject `""`).
+    const urlPath = urlPathRaw === "" ? "/" : urlPathRaw;
+    const myModule = await import(importPath);
+    const handlersByMethod = new Map(
+      typedKeys(HTTP_METHODS).map(method => [method, myModule[method]] as const)
+        .filter(([_, handler]) => isSmartRouteHandler(handler))
+    );
+    return [urlPath, handlersByMethod] as const;
+  })));
+
+  console.log(`Found ${endpoints.size} total endpoint files`);
+
+  // Generate specs for each audience using parseOpenAPI's built-in filtering
+  for (const audience of ['client', 'server', 'admin'] as const) {
+    const openApiSchemaObject = parseOpenAPI({
+      endpoints,
+      audience, // Let parseOpenAPI handle the audience-specific filtering
+    });
+
+    // Update server URL for Fumadocs
+    openApiSchemaObject.servers = [{
+      url: 'https://api.hexclave.com/api/v1',
+      description: 'Hexclave REST API',
+    }];
+
+    console.log(`Generated ${Object.keys(openApiSchemaObject.paths || {}).length} endpoints for ${audience} audience`);
+
+    const audienceJson = JSON.stringify(openApiSchemaObject, null, 2);
+    writeFileSyncIfChanged(
+      path.join(mintlifyOpenApiDir, `${audience}.json`),
+      audienceJson
+    );
+  }
+
+  // Generate webhooks schema
+  const webhookOpenAPISchema = parseWebhookOpenAPI({
+    webhooks: webhookEvents,
+  });
+
+  const webhooksJson = JSON.stringify(webhookOpenAPISchema, null, 2);
+  writeFileSyncIfChanged(
+    path.join(mintlifyOpenApiDir, 'webhooks.json'),
+    webhooksJson
+  );
+
+  console.log("Successfully updated Mintlify OpenAPI schemas with proper audience filtering");
+}
+
+// eslint-disable-next-line no-restricted-syntax
+main().catch((...args) => {
+  console.error(`ERROR! Could not update Mintlify OpenAPI schema`, ...args);
+  process.exit(1);
+});

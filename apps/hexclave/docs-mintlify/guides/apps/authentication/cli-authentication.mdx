@@ -1,0 +1,65 @@
+---
+title: CLI App Authentication
+description: How to authenticate users in your own command-line application using Hexclave
+sidebarTitle: CLI App Authentication
+---
+
+If you're building your own command-line application, you can use Hexclave to let users log in from a terminal.
+
+<Info>
+  This page is about adding authentication to your own CLI app. For the official Hexclave CLI, see the [Hexclave CLI guide](/guides/going-further/cli).
+</Info>
+
+To do so, we provide a Python template that you can use as a starting point. [Download it here](https://github.com/hexclave/hexclave/tree/main/docs/public/hexclave-cli-template.py) and copy it into your project, for example:
+
+```
+└─ my-python-app
+   ├─ main.py
+   └─ hexclave_cli_template.py  # <- the file you just downloaded (rename to use underscores for Python import)
+```
+
+Then, you can import the `prompt_cli_login` function. The project ID is enough for most projects; only pass `publishable_client_key` if the project has `requirePublishableClientKey` enabled.
+
+```py
+from hexclave_cli_template import prompt_cli_login
+
+# prompt the user to log in
+refresh_token = prompt_cli_login(
+  app_url="https://your-app-url.example.com",
+  project_id="your-project-id-here",
+)
+
+if refresh_token is None:
+  print("User cancelled the login process. Exiting")
+  exit(1)
+
+# you can also store the refresh token in a file, and only prompt the user to log in if the file doesn't exist
+
+# you can now use the REST API with the refresh token
+def hexclave_request(method, endpoint, **kwargs):
+  # ... see the REST API overview for required Hexclave headers
+  # https://docs.hexclave.com/api/overview
+
+def get_access_token(refresh_token):
+  access_token_response = hexclave_request(
+    'post',
+    '/api/v1/auth/sessions/current/refresh',
+    headers={
+      'x-hexclave-refresh-token': refresh_token,
+    }
+  )
+
+  return access_token_response['access_token']
+
+def get_user_object(access_token):
+  return hexclave_request(
+    'get',
+    '/api/v1/users/me',
+    headers={
+      'x-hexclave-access-token': access_token,
+    }
+  )
+
+user = get_user_object(get_access_token(refresh_token))
+print("The user is logged in as", user['display_name'] or user['primary_email'])
+```

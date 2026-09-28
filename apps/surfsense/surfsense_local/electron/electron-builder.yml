@@ -1,0 +1,92 @@
+appId: com.surfsense.app
+productName: SurfSense
+directories:
+  output: release
+  buildResources: build
+
+# The asar carries only the main + preload bundles. The renderer SPA, the two
+# frozen Python binaries, and llama-server ride alongside in resources/,
+# where the main process spawns them by path (sidecars/) and loads the SPA from
+# disk (index.ts).
+files:
+  - out/**/*
+  - package.json
+
+asar: true
+
+extraResources:
+  - from: ../backend/dist/api
+    to: backend/api
+  - from: ../backend/dist/worker
+    to: backend/worker
+  - from: ../frontend/dist
+    to: frontend/dist
+  # Embedding, voice, and Docling parser packs (build:model, build:voice,
+  # build:parser). First PDF stays offline; the worker is not blocked on Hub.
+  - from: ../backend/models
+    to: models
+  # llama-server in router mode (fetch-llamacpp.mjs verifies a pinned build and
+  # SHA-256, then prunes 24 executables to one plus its libraries). The GPU
+  # backend is Vulkan everywhere off Apple Silicon; no CUDA payload ships.
+  # Weights are downloaded post-install into the writable data dir, never bundled.
+  - from: llamacpp
+    to: llamacpp
+  # stable-diffusion.cpp's sd-server for local image generation (scripts/sdcpp/).
+  # Empty on hosts with no prebuilt binary; the sidecar then simply does not start.
+  - from: sdcpp
+    to: sdcpp
+  # audio.cpp's server for podcast voices, with the eSpeak-ng it phonemises
+  # through (scripts/audiocpp/). The default voice rides in the models pack
+  # above (build:voice); every other voice model is downloaded.
+  - from: audiocpp
+    to: audiocpp
+
+# The legacy 0.0.x desktop lives in the same repo and its updater reads
+# latest*.yml; this app publishes stable*.yml. Both manifests now sit on the
+# same release (see legacy-update-bridge in release-local.yml), so the channel
+# is the only thing keeping either app from parsing the other's.
+publish:
+  provider: github
+  owner: MODSetter
+  repo: SurfSense
+  channel: stable
+
+# Artifact names carry no version, so `/releases/latest/download/<name>` is a
+# permalink the README and the site can hardcode. electron-updater is fine with
+# it: the manifests name the file, and a cached download is validated by sha512
+# before it is ever installed.
+#
+# ponytail: the arch stays on the Mac names because the /downloads grid and the
+# license mail label assets by suffix (`-arm64.dmg`); dropping it there would
+# fall through to the raw filename. Windows and Linux ship one arch each, so
+# they leave it out — add `${arch}` back on the day a second one appears, or the
+# two builds overwrite each other.
+linux:
+  target: [AppImage, deb]
+  artifactName: "${productName}.${ext}"
+  category: Office
+  icon: build/icons/packaged/icon.png
+  executableName: surfsense-local
+  desktop:
+    entry:
+      Name: SurfSense
+      Comment: Local-first research over your own documents
+      Categories: Office;Utility;
+      StartupWMClass: SurfSense
+
+win:
+  target: [nsis]
+  artifactName: "${productName}-Setup.${ext}"
+  icon: build/icons/packaged/icon.ico
+
+
+mac:
+  target: [dmg, zip]
+  category: public.app-category.productivity
+  icon: build/icons/packaged/icon.icns
+  artifactName: "${productName}-${arch}.${ext}"
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  notarize: true

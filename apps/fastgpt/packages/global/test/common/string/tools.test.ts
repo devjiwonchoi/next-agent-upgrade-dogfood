@@ -1,0 +1,157 @@
+import { describe, expect, it } from 'vitest';
+import {
+  customNanoid,
+  formatNumberWithUnit,
+  getNanoid,
+  hashStr,
+  replaceRegChars,
+  replaceSensitiveText,
+  simpleText,
+  sliceJsonStr,
+  sliceStrStartEnd,
+  strIsLink
+} from '@fastgpt/global/common/string/tools';
+
+describe('string tools', () => {
+  it('should validate links', () => {
+    expect(strIsLink('http://example.com')).toBe(true);
+    expect(strIsLink('https://example.com/path?x=1')).toBe(true);
+    expect(strIsLink('www.example.com')).toBe(true);
+    expect(strIsLink('/assets/logo.png')).toBe(true);
+    expect(strIsLink('example.com')).toBe(false);
+    expect(strIsLink('ftp://example.com')).toBe(false);
+    expect(strIsLink('')).toBe(false);
+  });
+
+  it('should hash strings with sha256', () => {
+    expect(hashStr('hello')).toBe(
+      '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824'
+    );
+  });
+
+  it('should normalize text formatting', () => {
+    const input = '  你 好 \r\n\r\n\r\nfoo\x00bar  ';
+    expect(simpleText(input)).toBe('你好 \n\nfoo bar');
+    expect(simpleText('a   b')).toBe('a b');
+  });
+
+  it('should collapse blanks between chinese characters', () => {
+    expect(simpleText('中文  中文')).toBe('中文中文');
+    expect(simpleText('中文\t中文')).toBe('中文中文');
+    // 全角空格
+    expect(simpleText('中文　中文')).toBe('中文中文');
+    // 超过两个汉字时,每一处空白都要去掉,而不是隔一个去一个
+    expect(simpleText('中 文 字 符 串')).toBe('中文字符串');
+    expect(simpleText('产 品 说 明 书')).toBe('产品说明书');
+    expect(simpleText('这 是 一 段 中文')).toBe('这是一段中文');
+  });
+
+  it('should keep brackets and line indentation while normalizing blanks', () => {
+    expect(simpleText('参考 [[ 知识库 ]] 一节')).toBe('参考 [[ 知识库 ]] 一节');
+    expect(simpleText('{"matrix": [[]]}')).toBe('{"matrix": [[]]}');
+    expect(simpleText('中文 ]中文')).toBe('中文 ]中文');
+    expect(simpleText('def f():\n    return 1')).toBe('def f():\n    return 1');
+    expect(simpleText('line  \nnext')).toBe('line  \nnext');
+  });
+
+  it('should replace sensitive text', () => {
+    expect(replaceSensitiveText('Visit https://example.com/path?x=1')).toBe('Visit https://xxx');
+    expect(replaceSensitiveText('token ns-abc-123 and ns-xyz')).toBe('token xxx and xxx');
+  });
+
+  it('should generate nanoid with lowercase prefix', () => {
+    const id = getNanoid(12);
+    expect(id).toHaveLength(12);
+    expect(/^[a-z][a-zA-Z0-9]{11}$/.test(id)).toBe(true);
+
+    const single = getNanoid(1);
+    expect(single).toHaveLength(1);
+    expect(/^[a-z]$/.test(single)).toBe(true);
+  });
+
+  it('should generate custom nanoid', () => {
+    const id = customNanoid('ab', 6);
+    expect(id).toHaveLength(6);
+    expect(/^[ab]{6}$/.test(id)).toBe(true);
+  });
+
+  it('should escape regex special characters', () => {
+    const text = 'a+b*c?^$()[]{}|\\.';
+    const escaped = replaceRegChars(text);
+    const reg = new RegExp(escaped);
+    expect(reg.test(text)).toBe(true);
+  });
+
+  it('should slice json from mixed text', () => {
+    expect(sliceJsonStr('prefix {"a":1} suffix')).toBe('{"a":1}');
+    expect(sliceJsonStr('  [1,2,3] trailing')).toBe('[1,2,3]');
+    expect(sliceJsonStr('no json here')).toBe('no json here');
+    expect(sliceJsonStr('prefix {"a":1')).toBe('prefix {"a":1');
+  });
+
+  it('should stop at the end of the json, not at the last bracket in the text', () => {
+    // 模型常在 JSON 后面继续写解释,里面可能带括号
+    expect(sliceJsonStr('{"name":"get_weather"}\n\nI used the {city} you gave me.')).toBe(
+      '{"name":"get_weather"}'
+    );
+    expect(sliceJsonStr('{"a":1}\n{"b":2}')).toBe('{"a":1}');
+    expect(sliceJsonStr('```json\n{"a":1}\n```\nNote: {done}')).toBe('{"a":1}');
+    expect(sliceJsonStr('[1,2] and [3,4]')).toBe('[1,2]');
+  });
+
+  it('should not close the json on a bracket inside a string', () => {
+    expect(sliceJsonStr('{"a":"}"}')).toBe('{"a":"}"}');
+    expect(sliceJsonStr('{"a":"\\\\"}')).toBe('{"a":"\\\\"}');
+    expect(sliceJsonStr('{"nested":{"b":[1,{"c":2}]}} trailing')).toBe(
+      '{"nested":{"b":[1,{"c":2}]}}'
+    );
+    // 调用方用 JSON5 解析,单引号字符串同样要算在内
+    expect(sliceJsonStr("{name: 'a}b'} trailing")).toBe("{name: 'a}b'}");
+    expect(sliceJsonStr("1: {name: 'test_tool', arguments: {param: 'value', number: 42}}")).toBe(
+      "{name: 'test_tool', arguments: {param: 'value', number: 42}}"
+    );
+  });
+
+  it('should not close the json on a bracket inside a json5 comment', () => {
+    // 调用方用 JSON5 解析,注释里的括号不是结构括号
+    expect(sliceJsonStr('{a: 1, /* } */ b: 2}')).toBe('{a: 1, /* } */ b: 2}');
+    expect(sliceJsonStr('[1, /* ] */ 2]')).toBe('[1, /* ] */ 2]');
+    expect(sliceJsonStr('{a: 1, // }\n b: 2} trailing')).toBe('{a: 1, // }\n b: 2}');
+    expect(sliceJsonStr('[1, // ]\n 2] trailing')).toBe('[1, // ]\n 2]');
+    expect(sliceJsonStr('{a: 1, // }\r b: 2} trailing')).toBe('{a: 1, // }\r b: 2}');
+    expect(sliceJsonStr('{a: 1, // }\r\n b: 2} trailing')).toBe('{a: 1, // }\r\n b: 2}');
+    expect(sliceJsonStr('{a: 1, // }\u2028 b: 2} trailing')).toBe('{a: 1, // }\u2028 b: 2}');
+    expect(sliceJsonStr('{a: 1, // }\u2029 b: 2} trailing')).toBe('{a: 1, // }\u2029 b: 2}');
+    // 字符串里的注释符号仍然是普通字符
+    expect(sliceJsonStr('{a: "/* }"} trailing')).toBe('{a: "/* }"}');
+    // 除号不是注释
+    expect(sliceJsonStr('{a: 1 / 2} trailing')).toBe('{a: 1 / 2}');
+  });
+
+  it('should slice string with start and end', () => {
+    expect(sliceStrStartEnd('abc', 2, 2)).toBe('abc');
+    expect(sliceStrStartEnd(null, 2, 2)).toBe('');
+    expect(sliceStrStartEnd('abcdefghijklmnopqrstuvwxyz', 5, 4)).toBe(
+      'abcde\n\n...[hide 17 chars]...\n\nwxyz'
+    );
+  });
+
+  it('should format numbers with units', () => {
+    expect(formatNumberWithUnit(0)).toBe('0');
+    expect(formatNumberWithUnit(Number.NaN)).toBe('-');
+    expect(formatNumberWithUnit(123456, 'zh-CN')).toBe('12.35万');
+    expect(formatNumberWithUnit(-200000, 'zh-CN')).toBe('-20万');
+    expect(formatNumberWithUnit(100000000, 'zh-CN')).toBe('1亿');
+    expect(formatNumberWithUnit(123456, 'zh')).toBe('12.35万');
+    expect(formatNumberWithUnit(100000000, 'zh-Hant')).toBe('1億');
+    expect(formatNumberWithUnit(20000, 'zh-Hant')).toBe('2萬');
+    expect(formatNumberWithUnit(100000000, 'zh-tw')).toBe('1億');
+    expect(formatNumberWithUnit(20000, 'zh-hk')).toBe('2萬');
+    expect(formatNumberWithUnit(100000000, 'zh_hant_tw')).toBe('1億');
+    expect(formatNumberWithUnit(123456, 'ZH-CN')).toBe('12.35万');
+    expect(formatNumberWithUnit(1200, 'en')).toBe('1.2K');
+    expect(formatNumberWithUnit(1250000, 'en')).toBe('1.25M');
+    expect(formatNumberWithUnit(1500000000, 'en')).toBe('1.5B');
+    expect(formatNumberWithUnit(999, 'en')).toBe('999');
+  });
+});

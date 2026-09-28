@@ -1,0 +1,62 @@
+"use client";
+
+import { useDashboardInternalUser } from "@/lib/dashboard-user";
+import type { StackAdminApp, StackServerApp } from "@hexclave/next";
+import { HexclaveAssertionError, throwErr } from "@hexclave/shared/dist/utils/errors";
+import { notFound, usePathname } from "next/navigation";
+import React from "react";
+
+const HexclaveAdminAppContext = React.createContext<StackAdminApp<false> | null>(null);
+
+export function AdminAppProvider(props: { children: React.ReactNode }) {
+  const projectId = useProjectId();
+  const app = useAdminApp(projectId);
+  return (
+    <HexclaveAdminAppContext.Provider value={app}>
+      {props.children}
+    </HexclaveAdminAppContext.Provider>
+  );
+}
+
+export function useAdminAppIfExists() {
+  const hexclaveAdminApp = React.useContext(HexclaveAdminAppContext);
+  if (!hexclaveAdminApp) {
+    return null;
+  }
+
+  return hexclaveAdminApp;
+}
+
+export function useServerAppIfExists(): StackServerApp<false> | null {
+  return useAdminAppIfExists();
+}
+
+export function useAdminApp(projectId?: string) {
+  const user = useDashboardInternalUser();
+  const projects = user.useOwnedProjects();
+  const providedApp = useAdminAppIfExists();
+
+  if (projectId) {
+    const project = projects.find(p => p.id === projectId);
+    if (!project) {
+      console.warn(`Project ${projectId} does not exist, or ${user.id} does not have access to it`);
+      return notFound();
+    }
+    return project.app;
+  } else {
+    return providedApp ?? throwErr("useAdminApp must be used within an AdminInterfaceProvider");
+  }
+}
+
+export function useServerApp(projectId?: string): StackServerApp<false> {
+  return useAdminApp(projectId);
+}
+
+export function useProjectId() {
+  const pathname = usePathname();
+  if (!pathname.startsWith("/projects/")) {
+    throw new HexclaveAssertionError("useProjectId must be used within a project route");
+  }
+  const projectId = pathname.split("/")[2];
+  return projectId;
+}

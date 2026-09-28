@@ -34,6 +34,16 @@ Each `apps/` directory is copied from the listed public source commit. Upgrade b
 | Morphic | `miurla/morphic` | `25d572a110c3c12831d85d26b048b2cd2f6bd22c` | `apps/morphic` |
 | Typebot | `baptisteArno/typebot.io` | `3f2870121bf5aa6e8d189cedacfa8c0d20d6774f` | `apps/typebot/apps/builder` |
 | TypeHero | `typehero/typehero` | `7871629e9a77718312e68a367644ce3fc286ef04` | `apps/typehero/apps/web` |
+| Vercel Chatbot | `vercel/chatbot` | `c2f8235e1f3ea903ad8b7f61447c4f74164b5c58` | `apps/vercel-chatbot` |
+| Mission Control | `builderz-labs/mission-control` | `e28edf8b28c85a32f1fd55ac577d325df6b16e4a` | `apps/mission-control` |
+| SurfSense | `MODSetter/SurfSense` | `a51f9a367ccafe873d7d85a4f3878e5a6de4e662` | `apps/surfsense/surfsense_web` |
+| Cap | `CapSoftware/Cap` | `7826fa028b324d2dda860a4f029c6b1a404c9c78` | `apps/cap/apps/web` |
+| FastGPT | `labring/FastGPT` | `a19745dd90136ad69c5d863184f5a434d3c5bba0` | `apps/fastgpt/projects/app` |
+| 8bitcn-ui | `TheOrcDev/8bitcn-ui` | `37031e37d6f68aad4b147ce699b70dba22af7841` | `apps/8bitcn-ui` |
+| LobeHub | `lobehub/lobehub` | `d404374f7f0afb162ac1cb1f45156411fce78940` | `apps/lobehub` |
+| Hexclave | `hexclave/hexclave` | `6fa30acada07d8dbdfd061bdf2f048a9b2750c04` | `apps/hexclave/apps/dashboard` |
+| Postiz | `gitroomhq/postiz-app` | `528f6ea37c8cf1156ad4a12de4e7aed853c019f2` | `apps/postiz/apps/frontend` |
+| termcn | `shadcn-labs/termcn` | `9d06ed9ca7bd54625fb5ab72e9598865836e695e` | `apps/termcn/apps/web` |
 
 Glass includes its pinned `aec` submodule contents at `9e11f4f95707714464194bdfc9db0222ec5c6163`. These are source snapshots, not upstream Git histories.
 
@@ -41,3 +51,4 @@ Overreacted has no repository license file; the dogfood repository owner confirm
 Tailwind CSS website has no repository license file; the dogfood repository owner confirmed redistribution permission for this snapshot.
 The Supabase snapshot omits `apps/ui-library/.env` and `examples/product-sample-supabase-kt/local.properties`; they are local configuration files outside the selected Studio app.
 Onlook's `apps/admin` submodule is not included; the selected Next.js app is in `apps/web/client`.
+For the fourth batch, tracked `.env` files and examples were omitted from the public snapshots. SurfSense's root license covers Apache-licensed code and a separately licensed proprietary directory; both license texts remain in its snapshot.

@@ -1,0 +1,33 @@
+{
+  "name": "termcn",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "type": "module",
+  "scripts": {
+    "dev": "turbo run dev --filter=web",
+    "build": "turbo run build --filter=web",
+    "start": "turbo run start --filter=web",
+    "typecheck": "turbo run typecheck",
+    "examples:build": "turbo run examples:build --filter=web",
+    "registry:build": "turbo run registry:build --filter=web",
+    "check": "ultracite check",
+    "fix": "ultracite fix",
+    "prepare": "lefthook install"
+  },
+  "devDependencies": {
+    "lefthook": "^2.1.4",
+    "oxfmt": "^0.45.0",
+    "oxlint": "^1.60.0",
+    "turbo": "^2.10.2",
+    "typescript": "^6",
+    "ultracite": "7.6.0"
+  },
+  "engines": {
+    "node": ">=20.9.0",
+    "pnpm": ">=10.0.0"
+  },
+  "packageManager": "pnpm@10.28.2"
+}

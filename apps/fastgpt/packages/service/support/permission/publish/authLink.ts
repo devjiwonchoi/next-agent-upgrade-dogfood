@@ -1,0 +1,136 @@
+import { type AppWithPermissionType } from '@fastgpt/global/core/app/type';
+import {
+  type OutlinkAppType,
+  type OutLinkSchemaType,
+  type ShareOutLinkSchemaType
+} from '@fastgpt/global/support/outLink/type';
+import { MongoOutLink } from '../../outLink/schema';
+import { OutLinkErrEnum } from '@fastgpt/global/common/error/code/outLink';
+import { ManagePermissionVal } from '@fastgpt/global/support/permission/constant';
+import { authAppByTmbId } from '../app/auth';
+import { type AuthModeType, type AuthResponseType } from '../type';
+import { parseHeaderCert } from '../auth/common';
+import { PublishChannelEnum } from '@fastgpt/global/support/outLink/constant';
+import type { z } from 'zod';
+import { getLogger, LogCategories } from '../../../common/logger';
+
+const logger = getLogger(LogCategories.MODULE.OUTLINK);
+import { assertCancellation } from '../../user/account/cancellation/guard';
+import { getUserIdByTmbId } from '../../user/team/utils';
+import { normalizeShareOutLinkAllowAnonymous } from '../../outLink/compatibility';
+
+/* crud outlink permission */
+export async function authOutLinkCrud({
+  outLinkId,
+  per = ManagePermissionVal,
+  ...props
+}: AuthModeType & {
+  outLinkId: string;
+}): Promise<
+  AuthResponseType & {
+    app: AppWithPermissionType;
+    outLink: OutLinkSchemaType;
+  }
+> {
+  const result = await parseHeaderCert(props);
+  const { tmbId, teamId } = result;
+
+  const { app, outLink } = await (async () => {
+    const outLink = await MongoOutLink.findOne({ _id: outLinkId, teamId });
+    if (!outLink) {
+      return Promise.reject(OutLinkErrEnum.unExist);
+    }
+
+    if (String(outLink.teamId) !== teamId) {
+      return Promise.reject(OutLinkErrEnum.unAuthLink);
+    }
+
+    const { app } = await authAppByTmbId({
+      tmbId,
+      appId: outLink.appId,
+      per
+    });
+
+    return {
+      outLink,
+      app
+    };
+  })();
+
+  return {
+    ...result,
+    permission: app.permission,
+    app,
+    outLink
+  };
+}
+
+/* outLink exist and it app exist */
+export async function authOutLinkValid<T extends OutlinkAppType = any>({
+  shareId
+}: {
+  shareId?: string;
+}) {
+  if (!shareId) {
+    return Promise.reject(OutLinkErrEnum.linkUnInvalid);
+  }
+  const storedOutLinkConfig = await MongoOutLink.findOne({
+    shareId,
+    type: PublishChannelEnum.share
+  }).lean<OutLinkSchemaType<T>>();
+
+  if (!storedOutLinkConfig) {
+    return Promise.reject(OutLinkErrEnum.linkUnInvalid);
+  }
+  const outLinkConfig = normalizeShareOutLinkAllowAnonymous(
+    storedOutLinkConfig
+  ) as ShareOutLinkSchemaType<T>;
+
+  // 分享链接没有用户 Session，使用发布链接绑定的 tmb/team 校验账号可用性
+  await assertCancellation({
+    teamId: String(outLinkConfig.teamId),
+    userId: await getUserIdByTmbId(String(outLinkConfig.tmbId))
+  });
+
+  return {
+    appId: outLinkConfig.appId,
+    outLinkConfig: outLinkConfig
+  };
+}
+
+/**
+ * Loads provider config by channel and validates the stored app payload instead of trusting the
+ * TypeScript generic.
+ */
+export async function loadOutlinkProviderConfig<T extends OutlinkAppType>({
+  shareId,
+  channel,
+  appSchema
+}: {
+  shareId?: string;
+  channel: PublishChannelEnum;
+  appSchema: z.ZodType<T>;
+}): Promise<OutLinkSchemaType<T>> {
+  if (!shareId) return Promise.reject(OutLinkErrEnum.linkUnInvalid);
+
+  const outLinkConfig = await MongoOutLink.findOne({
+    shareId,
+    type: channel
+  }).lean<OutLinkSchemaType>();
+  if (!outLinkConfig) return Promise.reject(OutLinkErrEnum.linkUnInvalid);
+
+  const appResult = appSchema.safeParse(outLinkConfig.app);
+  if (!appResult.success) {
+    logger.warn('Invalid outlink provider config', {
+      shareId,
+      channel,
+      issues: appResult.error.issues.map(({ code, path }) => ({ code, path }))
+    });
+    return Promise.reject(OutLinkErrEnum.linkUnInvalid);
+  }
+
+  return {
+    ...outLinkConfig,
+    app: appResult.data
+  };
+}

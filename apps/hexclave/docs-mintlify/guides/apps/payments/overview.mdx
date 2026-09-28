@@ -1,0 +1,111 @@
+---
+title: "Payments"
+description: "Sell subscriptions and one-time products, and manage entitlements like credits and seats - billing without the plumbing"
+sidebarTitle: "Overview"
+---
+
+<Visibility for="agents">
+<Note>
+  **For agents/LLMs:** This is a high-level *marketing* overview of the Payments app, not an implementation reference. To actually build with payments, start at [Payments setup](./setup), then use the concept pages: [Products & Pricing](./products-and-pricing), [Items & Entitlements](./items-and-entitlements), [Checkout & Purchases](./checkout), [Subscriptions](./subscriptions), [Billing & Invoices](./billing-and-invoices), [Refunds](./refunds), [Granting Products](./granting-products), and [Customer Types](./customers).
+</Note>
+</Visibility>
+
+import { PricingSkeleton, EntitlementsSkeleton, TransactionsSkeleton } from "/snippets/skeletons/payments-skeletons.jsx";
+
+Charging the card is the easy part. Everything *after* that - turning a payment into access, keeping it in sync, handling upgrades, refunds, and renewals - is the part you'd normally build and maintain yourself. The Payments app owns that layer. You define products in the dashboard; Hexclave runs checkout, grants and revokes entitlements, tracks subscriptions, and keeps your billing state correct. Below are the questions developers actually ask, and the honest answers.
+
+## Can I sell a subscription or one-time product?
+
+Yes. Define products and prices in the dashboard, then generate a checkout URL and redirect. Hexclave handles the checkout session, the webhook, and granting access on success - you never write a webhook handler.
+
+```typescript
+const checkoutUrl = await user.createCheckoutUrl({
+  productId: "pro_monthly",
+  returnUrl: window.location.href,
+});
+window.location.href = checkoutUrl;
+```
+
+<PricingSkeleton />
+
+Group products into a **product line** to make them mutually exclusive - Free, Pro, and Enterprise where a customer can only hold one at a time. Upgrades, downgrades, and proration on plan switches are handled for you. Recurring prices can include a **free trial** — the card is collected at checkout and charged when the trial ends. See [Products & Pricing](./products-and-pricing#free-trials).
+
+## Can I sell credits, seats, or API quota?
+
+Yes - and this is the real point. Products include **items**: quantifiable entitlements like credits, seats, or API calls, with their own quantity, refresh schedule, and expiration. When a customer buys, the items are granted. When their plan ends, they're revoked. You don't track any of it in your own database.
+
+<EntitlementsSkeleton />
+
+Read a balance anywhere with a hook that stays in sync, and check access without a billing round-trip:
+
+```typescript
+// Client - re-renders when the balance changes
+const credits = user.useItem("credits");
+return <span>{credits.nonNegativeQuantity} credits left</span>;
+```
+
+## Can I consume credits safely under load?
+
+Yes. Consume on the server with `tryDecreaseQuantity` - a single transactional operation that returns `false` instead of letting a balance go negative. No read-then-write race, no double-spend when two requests land at once.
+
+```typescript
+const credits = await user.getItem("credits");
+const ok = await credits.tryDecreaseQuantity(1);
+if (!ok) throw new Error("Out of credits");
+// ...do the work
+```
+
+Grant more with `increaseQuantity`, or adjust manually from the dashboard. This is the consumption layer you'd otherwise build by hand with a ledger table and a pile of webhooks.
+
+## What exactly does Hexclave own for me?
+
+With a raw payment processor you build and maintain the glue: webhook handlers, granting and revoking access on payment, proration on upgrades, refunds, subscription endings, and keeping your own database in sync with all of it. Hexclave owns that layer:
+
+- **Webhooks** - received and reconciled for you; there's nothing to host
+- **Grants & revokes** - products and items are applied on payment and removed when a subscription ends or a refund is issued
+- **Subscription lifecycle** - status, renewals, cancellations, and period ends tracked automatically
+- **Proration** - handled automatically on plan switches, triggered through one SDK call
+- **Refunds** - issued from the dashboard (partial or full), with optional entitlement revocation. See [Refunds](./refunds).
+- **Sync** - entitlement and subscription state stays consistent without a database to babysit
+
+<TransactionsSkeleton />
+
+## Can I bill teams and external customers, not just users?
+
+Yes. Every customer is a **user**, a **team**, or a **custom customer** (any external entity you key by ID). The billing surface - `createCheckoutUrl`, `useProducts`, `useItem`, `switchSubscription` - lives on user and team objects; custom customers are managed from the server SDK for items, products, and grants.
+
+## Can I manage subscriptions in code?
+
+Yes. Switch a customer between plans in the same product line, or cancel, with a single call - proration and timing handled for you.
+
+```typescript
+await user.switchSubscription({
+  fromProductId: "pro_monthly",
+  toProductId: "enterprise_monthly",
+});
+
+await hexclaveServerApp.cancelSubscription({ productId: "pro_monthly" });
+```
+
+You can also `grantProduct` directly - for trials, comps, or admin grants - with a pre-defined product or an inline one-off definition.
+
+## Can I build and test before going live?
+
+Yes. Flip on **test mode** and purchases are granted instantly for free - no real charge, no live round-trip - so you can wire up entitlements end to end before connecting a real account.
+
+## What it costs, and what it doesn't do
+
+Straight answers so there are no surprises:
+
+- **Platform fee** - Hexclave takes a **0.9%** fee on charges, on top of standard payment processing fees.
+- **Currency** - payments are processed in **USD** today.
+- **Not a marketplace** - Payments run through a single connected payment account per project. It isn't built for marketplace-style payouts to many sellers.
+- **Not locked in** - this is a convenience layer, not a cage. Use it because it saves you the billing plumbing, not because you have to.
+
+## Start here
+
+1. [Set up Hexclave](/guides/getting-started/setup), then enable **Payments** in the dashboard.
+2. Connect your payment account under **Payments → Settings**, and turn on **test mode** while you build.
+3. Define a product (with items, if you want entitlements), then call `user.createCheckoutUrl(...)`.
+
+Ready for the details - products, items, subscriptions, billing, invoices, refunds, and grants? Start with [Payments setup](./setup).

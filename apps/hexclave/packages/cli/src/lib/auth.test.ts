@@ -1,0 +1,90 @@
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { isRetryableFetchError, resolveProjectId } from "./auth.js";
+
+describe("isRetryableFetchError", () => {
+  it("retries TypeError (Node fetch wraps connection errors as TypeError)", () => {
+    expect(isRetryableFetchError(new TypeError("fetch failed"))).toBe(true);
+  });
+
+  it("retries AbortError and TimeoutError (per-request signal fired)", () => {
+    const abort = new Error("aborted");
+    abort.name = "AbortError";
+    expect(isRetryableFetchError(abort)).toBe(true);
+    const timeout = new Error("timed out");
+    timeout.name = "TimeoutError";
+    expect(isRetryableFetchError(timeout)).toBe(true);
+  });
+
+  it("retries ECONNREFUSED / ENOTFOUND / ETIMEDOUT / ECONNRESET messages", () => {
+    expect(isRetryableFetchError(new Error("connect ECONNREFUSED 127.0.0.1:1"))).toBe(true);
+    expect(isRetryableFetchError(new Error("getaddrinfo ENOTFOUND foo"))).toBe(true);
+    expect(isRetryableFetchError(new Error("ETIMEDOUT"))).toBe(true);
+    expect(isRetryableFetchError(new Error("read ECONNRESET"))).toBe(true);
+  });
+
+  it("retries non-Error throws (defensive: unknown shape, give it another go)", () => {
+    expect(isRetryableFetchError("string")).toBe(true);
+    expect(isRetryableFetchError(undefined)).toBe(true);
+    expect(isRetryableFetchError({ weird: true })).toBe(true);
+  });
+
+  it("does not retry generic Errors that aren't transport-shaped", () => {
+    expect(isRetryableFetchError(new Error("something else broke"))).toBe(false);
+    expect(isRetryableFetchError(new SyntaxError("bad json"))).toBe(false);
+  });
+});
+
+describe("resolveProjectId", () => {
+  const SAVED = process.env.STACK_PROJECT_ID;
+  const SAVED_HEXCLAVE = process.env.HEXCLAVE_PROJECT_ID;
+  beforeEach(() => {
+    delete process.env.STACK_PROJECT_ID;
+    delete process.env.HEXCLAVE_PROJECT_ID;
+  });
+  afterEach(() => {
+    if (SAVED === undefined) delete process.env.STACK_PROJECT_ID;
+    else process.env.STACK_PROJECT_ID = SAVED;
+    if (SAVED_HEXCLAVE === undefined) delete process.env.HEXCLAVE_PROJECT_ID;
+    else process.env.HEXCLAVE_PROJECT_ID = SAVED_HEXCLAVE;
+  });
+
+  it("uses the --cloud-project-id option when provided", () => {
+    expect(resolveProjectId("proj_from_flag")).toBe("proj_from_flag");
+  });
+
+  it("falls back to the STACK_PROJECT_ID env var when the option is omitted", () => {
+    process.env.STACK_PROJECT_ID = "proj_from_env";
+    expect(resolveProjectId(undefined)).toBe("proj_from_env");
+  });
+
+  it("uses the HEXCLAVE_PROJECT_ID env var", () => {
+    process.env.HEXCLAVE_PROJECT_ID = "proj_from_hexclave_env";
+    expect(resolveProjectId(undefined)).toBe("proj_from_hexclave_env");
+  });
+
+  it("throws when the Hexclave and Stack env vars disagree", () => {
+    process.env.HEXCLAVE_PROJECT_ID = "proj_from_hexclave_env";
+    process.env.STACK_PROJECT_ID = "proj_from_stack_env";
+    expect(() => resolveProjectId(undefined)).toThrow(/HEXCLAVE_PROJECT_ID.*STACK_PROJECT_ID.*different values/);
+  });
+
+  it("prefers the option over the env var", () => {
+    process.env.STACK_PROJECT_ID = "proj_from_env";
+    expect(resolveProjectId("proj_from_flag")).toBe("proj_from_flag");
+  });
+
+  it("does not inspect conflicting env vars when the option is present", () => {
+    process.env.HEXCLAVE_PROJECT_ID = "proj_from_hexclave_env";
+    process.env.STACK_PROJECT_ID = "proj_from_stack_env";
+    expect(resolveProjectId("proj_from_flag")).toBe("proj_from_flag");
+  });
+
+  it("treats an empty option string as absent and falls back to the env var", () => {
+    process.env.STACK_PROJECT_ID = "proj_from_env";
+    expect(resolveProjectId("")).toBe("proj_from_env");
+  });
+
+  it("throws a CliError with help text when neither is provided", () => {
+    expect(() => resolveProjectId(undefined)).toThrow(/HEXCLAVE_PROJECT_ID/);
+  });
+});

@@ -1,0 +1,65 @@
+name: Ensure Prisma migrations are in sync with the schema
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+  pull_request:
+
+# A concurrency group only ever runs one run at a time, so the sha is part of the group on main/dev:
+# otherwise consecutive dev pushes queue behind each other (and GitHub cancels the older queued run),
+# so one slow or hung run silently skips CI for every commit after it. PRs and feature branches stay
+# grouped per ref, where cancelling superseded runs is what we want.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev') && format('-{0}', github.sha) || '' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/dev' }}
+
+jobs:
+  check_prisma_migrations:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node-version: [24.x]
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+
+      # Even just starting the Docker Compose as a daemon is slow because we have to download and build the images
+      # so, we run it in the background
+      - name: Start Docker Compose in background
+        uses: JarvusInnovations/background-action@2428e7b970a846423095c79d43f759abf979a635 # v1.0.7
+        with:
+          run: docker compose -f docker/dependencies/docker.compose.yaml up -d &
+          # we don't need to wait on anything, just need to start the daemon
+          wait-on: /dev/null
+          tail: true
+          wait-for: 3s
+          log-output-if: true
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Wait on Postgres
+        run: pnpm run wait-until-postgres-is-ready:pg_isready
+      
+      - name: Build packages
+        run: pnpm run build:packages
+
+      - name: Codegen
+        run: pnpm run codegen
+
+      - name: Initialize database
+        run: pnpm run db:init
+
+      - name: Check for differences in Prisma schema and current DB
+        run: cd apps/backend && pnpm run prisma:dev migrate diff --from-config-datasource --to-schema ./prisma/schema.prisma --exit-code

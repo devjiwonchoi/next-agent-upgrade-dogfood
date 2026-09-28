@@ -1,0 +1,292 @@
+
+import { throwErr } from "@hexclave/shared/dist/utils/errors";
+import { it, localRedirectUrl, updateCookiesFromResponse } from "../../../../../../helpers";
+import { Auth, InternalApiKey, Project, niceBackendFetch } from "../../../../../backend-helpers";
+
+it("should return outer authorization code when inner callback url is valid", async ({ expect }) => {
+  const response = await Auth.OAuth.getAuthorizationCode();
+  expect(response.authorizationCode).toBeTruthy();
+});
+
+it("should return outer authorization code when inner callback url is valid, even if invalid error redirect url is passed", async ({ expect }) => {
+  const authorize = await Auth.OAuth.authorize({ errorRedirectUrl: "http://error-redirect-url.stack-test.example.com" });
+  const getInnerCallbackUrlResponse = await Auth.OAuth.getInnerCallbackUrl(authorize);
+  const response = await Auth.OAuth.getAuthorizationCode(getInnerCallbackUrlResponse);
+  expect(response.authorizationCode).toBeTruthy();
+});
+
+it("should fail when inner callback has invalid provider ID", async ({ expect }) => {
+  const getInnerCallbackUrlResponse = await Auth.OAuth.getInnerCallbackUrl();
+  const innerCallbackUrl = new URL(getInnerCallbackUrlResponse.innerCallbackUrl);
+  innerCallbackUrl.pathname = "/api/v1/auth/oauth/callback/microsoft";
+  const cookie = updateCookiesFromResponse("", getInnerCallbackUrlResponse.authorizeResponse);
+  const response = await niceBackendFetch(innerCallbackUrl, {
+    redirect: "manual",
+    headers: {
+      cookie,
+    },
+  });
+  expect(response).toMatchInlineSnapshot(`
+    NiceResponse {
+      "status": 400,
+      "body": "Inner OAuth callback failed due to invalid grant. Please try again.",
+      "headers": Headers {
+        "set-cookie": <deleting cookie 'stack-oauth-inner-<stripped cookie name key>' at path '/'>,
+        <some fields may have been hidden>,
+      },
+    }
+  `);
+});
+
+it("should fail when account is new and sign ups are disabled", async ({ expect }) => {
+  await Project.createAndSwitch({ config: { sign_up_enabled: false, oauth_providers: [ { id: "spotify", type: "shared" } ] } });
+  await InternalApiKey.createAndSetProjectKeys();
+  const afterCallbackRedirectUrl = localRedirectUrl + "/settings?tab=connected-accounts#oauth";
+  const authorize = await Auth.OAuth.authorize({ afterCallbackRedirectUrl });
+  const getInnerCallbackUrlResponse = await Auth.OAuth.getInnerCallbackUrl(authorize);
+  const cookie = updateCookiesFromResponse("", getInnerCallbackUrlResponse.authorizeResponse);
+  const response = await niceBackendFetch(getInnerCallbackUrlResponse.innerCallbackUrl, {
+    redirect: "manual",
+    headers: {
+      cookie,
+    },
+  });
+  expect(response.status).toBe(307);
+  const location = response.headers.get("location");
+  expect(location).toBeTruthy();
+  if (location == null) {
+    throw new Error("OAuth callback error redirect location is missing");
+  }
+  const locationUrl = new URL(location);
+  expect(locationUrl.origin).toBe("http://stack-test.localhost");
+  expect(locationUrl.pathname).toBe("/some-callback-url");
+  expect(locationUrl.searchParams.get("error")).toBe("server_error");
+  expect(locationUrl.searchParams.get("errorCode")).toBe("SIGN_UP_NOT_ENABLED");
+  expect(locationUrl.searchParams.get("error_description")).toBe("Creation of new accounts is not enabled for this project. Please ask the project owner to enable it.");
+  expect(locationUrl.searchParams.get("message")).toBe("Creation of new accounts is not enabled for this project. Please ask the project owner to enable it.");
+  expect(locationUrl.searchParams.get("details")).toBe("{}");
+  expect(locationUrl.searchParams.get("after_callback_redirect_url")).toBe(afterCallbackRedirectUrl);
+  expect(response.headers.get("set-cookie")).toMatch(/stack-oauth-inner-/);
+});
+
+it("should fail when cookies are missing", async ({ expect }) => {
+  const getInnerCallbackUrlResponse = await Auth.OAuth.getInnerCallbackUrl();
+  const response = await niceBackendFetch(getInnerCallbackUrlResponse.innerCallbackUrl, {
+    redirect: "manual",
+  });
+  expect(response).toMatchInlineSnapshot(`
+    NiceResponse {
+      "status": 400,
+      "body": "Inner OAuth cookie not found. This is likely because you refreshed the page during the OAuth sign in process. Please try signing in again",
+      "headers": Headers {
+        "set-cookie": <deleting cookie 'stack-oauth-inner-<stripped cookie name key>' at path '/'>,
+        <some fields may have been hidden>,
+      },
+    }
+  `);
+});
+
+it("should fail when inner callback has invalid authorization code", async ({ expect }) => {
+  const getInnerCallbackUrlResponse = await Auth.OAuth.getInnerCallbackUrl();
+  const innerCallbackUrl = new URL(getInnerCallbackUrlResponse.innerCallbackUrl);
+  innerCallbackUrl.searchParams.set("code", "invalid-authorization-code");
+  const cookie = updateCookiesFromResponse("", getInnerCallbackUrlResponse.authorizeResponse);
+  const response = await niceBackendFetch(innerCallbackUrl, {
+    redirect: "manual",
+    headers: {
+      cookie,
+    },
+  });
+  expect(response).toMatchInlineSnapshot(`
+    NiceResponse {
+      "status": 400,
+      "body": "Inner OAuth callback failed due to invalid grant. Please try again.",
+      "headers": Headers {
+        "set-cookie": <deleting cookie 'stack-oauth-inner-<stripped cookie name key>' at path '/'>,
+        <some fields may have been hidden>,
+      },
+    }
+  `);
+});
+
+it("should redirect to error callback url when inner callback has invalid authorization code", async ({ expect }) => {
+  const authorize = await Auth.OAuth.authorize({ errorRedirectUrl: localRedirectUrl + "/callback-error" });
+  const getInnerCallbackUrlResponse = await Auth.OAuth.getInnerCallbackUrl(authorize);
+  const innerCallbackUrl = new URL(getInnerCallbackUrlResponse.innerCallbackUrl);
+  innerCallbackUrl.searchParams.set("code", "invalid-authorization-code");
+  const cookie = updateCookiesFromResponse("", getInnerCallbackUrlResponse.authorizeResponse);
+  const response = await niceBackendFetch(innerCallbackUrl, {
+    redirect: "manual",
+    headers: {
+      cookie,
+    },
+  });
+  expect(response).toMatchInlineSnapshot(`
+    NiceResponse {
+      "status": 400,
+      "body": "Inner OAuth callback failed due to invalid grant. Please try again.",
+      "headers": Headers {
+        "set-cookie": <deleting cookie 'stack-oauth-inner-<stripped cookie name key>' at path '/'>,
+        <some fields may have been hidden>,
+      },
+    }
+  `);
+});
+
+it("should fail when inner callback has invalid authorization code and when an invalid error redirect url is passed", async ({ expect }) => {
+  const authorize = await Auth.OAuth.authorize({ errorRedirectUrl: "http://error-redirect-url.stack-test.example.com" });
+  const getInnerCallbackUrlResponse = await Auth.OAuth.getInnerCallbackUrl(authorize);
+  const innerCallbackUrl = new URL(getInnerCallbackUrlResponse.innerCallbackUrl);
+  innerCallbackUrl.searchParams.set("code", "invalid-authorization-code");
+  const cookie = updateCookiesFromResponse("", getInnerCallbackUrlResponse.authorizeResponse);
+  const response = await niceBackendFetch(innerCallbackUrl, {
+    redirect: "manual",
+    headers: {
+      cookie,
+    },
+  });
+  expect(response).toMatchInlineSnapshot(`
+    NiceResponse {
+      "status": 400,
+      "body": "Inner OAuth callback failed due to invalid grant. Please try again.",
+      "headers": Headers {
+        "set-cookie": <deleting cookie 'stack-oauth-inner-<stripped cookie name key>' at path '/'>,
+        <some fields may have been hidden>,
+      },
+    }
+  `);
+});
+
+it("should fail when inner callback has invalid state", async ({ expect }) => {
+  const getInnerCallbackUrlResponse = await Auth.OAuth.getInnerCallbackUrl();
+  const innerCallbackUrl = new URL(getInnerCallbackUrlResponse.innerCallbackUrl);
+  innerCallbackUrl.searchParams.set("state", "invalid-state");
+  const cookie = updateCookiesFromResponse("", getInnerCallbackUrlResponse.authorizeResponse);
+  const response = await niceBackendFetch(innerCallbackUrl, {
+    redirect: "manual",
+    headers: {
+      cookie,
+    },
+  });
+  expect(response).toMatchInlineSnapshot(`
+    NiceResponse {
+      "status": 400,
+      "body": "Invalid OAuth state. Please try signing in again.",
+      "headers": Headers { <some fields may have been hidden> },
+    }
+  `);
+});
+
+it("should complete a form_post (Apple-style) inner callback that arrives as a cookie-less cross-site POST", async ({ expect }) => {
+  const { authorizeResponse, innerCallbackUrl } = await Auth.OAuth.getInnerCallbackUrl();
+  const cookie = updateCookiesFromResponse("", authorizeResponse);
+
+  // Apple uses response_mode=form_post, so the authorization response arrives as a
+  // cross-site POST, which browsers do not send SameSite=Lax cookies with.
+  const formPostResponse = await niceBackendFetch(innerCallbackUrl.pathname, {
+    method: "POST",
+    redirect: "manual",
+    rawContentType: "application/x-www-form-urlencoded",
+    rawBody: new TextEncoder().encode(innerCallbackUrl.searchParams.toString()),
+  });
+  expect(formPostResponse.status).toBe(303);
+  const bouncedUrl = new URL(formPostResponse.headers.get("location") ?? throwErr("missing form_post bounce location"), innerCallbackUrl);
+  expect(bouncedUrl.pathname).toBe(innerCallbackUrl.pathname);
+  expect(bouncedUrl.searchParams.get("state")).toBe(innerCallbackUrl.searchParams.get("state"));
+  expect(bouncedUrl.searchParams.get("code")).toBe(innerCallbackUrl.searchParams.get("code"));
+
+  // The bounce is a top-level GET navigation, which does carry the inner cookie.
+  const response = await niceBackendFetch(bouncedUrl, {
+    redirect: "manual",
+    headers: {
+      cookie,
+    },
+  });
+  expect(response.status).toBe(303);
+  const outerCallbackUrl = new URL(response.headers.get("location") ?? throwErr("missing outer callback location"));
+  expect(outerCallbackUrl.origin).toBe(new URL(localRedirectUrl).origin);
+  expect(outerCallbackUrl.searchParams.get("code")).toBeTruthy();
+});
+
+it("should not consume the OAuth state when a form_post inner callback is bounced", async ({ expect }) => {
+  const { innerCallbackUrl } = await Auth.OAuth.getInnerCallbackUrl();
+  const formPost = async () => await niceBackendFetch(innerCallbackUrl.pathname, {
+    method: "POST",
+    redirect: "manual",
+    rawContentType: "application/x-www-form-urlencoded",
+    rawBody: new TextEncoder().encode(innerCallbackUrl.searchParams.toString()),
+  });
+  expect((await formPost()).status).toBe(303);
+  // Before the bounce existed, the cookie-less POST burned the single-use outer info, so
+  // the (re-)submitted callback failed with "Invalid OAuth state" instead.
+  expect((await formPost()).status).toBe(303);
+});
+
+it("should fail if an untrusted redirect URL is provided", async ({ expect }) => {
+  const authorize = await Auth.OAuth.authorize({ redirectUrl: "http://untrusted-redirect-url.stack-test.example.com" });
+  const getInnerCallbackUrlResponse = await Auth.OAuth.getInnerCallbackUrl(authorize);
+  const cookie = updateCookiesFromResponse("", getInnerCallbackUrlResponse.authorizeResponse);
+  const response = await niceBackendFetch(getInnerCallbackUrlResponse.innerCallbackUrl, {
+    redirect: "manual",
+    headers: {
+      cookie,
+    },
+  });
+  expect(response).toMatchInlineSnapshot(`
+    NiceResponse {
+      "status": 400,
+      "body": {
+        "code": "REDIRECT_URL_NOT_WHITELISTED",
+        "details": { "redirect_url": "http://untrusted-redirect-url.stack-test.example.com" },
+        "error": "Redirect URL not whitelisted. Did you forget to add this domain to the trusted domains list on the Hexclave dashboard?",
+      },
+      "headers": Headers {
+        "set-cookie": <deleting cookie 'stack-oauth-inner-<stripped cookie name key>' at path '/'>,
+        "x-stack-known-error": "REDIRECT_URL_NOT_WHITELISTED",
+        <some fields may have been hidden>,
+      },
+    }
+  `);
+});
+
+it("should fail if an untrusted redirect URL is provided that is similar to a trusted domain", async ({ expect }) => {
+  await Project.createAndSwitch({
+    config: {
+      oauth_providers: [
+        { id: "spotify", type: "shared" },
+      ],
+      domains: [
+        {
+          domain: "https://trusted-domain.com",
+          handler_path: "/api/v1/auth/oauth/callback/spotify",
+        },
+      ],
+    },
+  });
+  await InternalApiKey.createAndSetProjectKeys();
+  const authorize = await Auth.OAuth.authorize({ redirectUrl: "https://trusted-domain.com.evil.com" });
+  const getInnerCallbackUrlResponse = await Auth.OAuth.getInnerCallbackUrl(authorize);
+  const cookie = updateCookiesFromResponse("", getInnerCallbackUrlResponse.authorizeResponse);
+  const response = await niceBackendFetch(getInnerCallbackUrlResponse.innerCallbackUrl, {
+    redirect: "manual",
+    headers: {
+      cookie,
+    },
+  });
+  expect(response).toMatchInlineSnapshot(`
+    NiceResponse {
+      "status": 400,
+      "body": {
+        "code": "REDIRECT_URL_NOT_WHITELISTED",
+        "details": { "redirect_url": "https://trusted-domain.com.evil.com" },
+        "error": "Redirect URL not whitelisted. Did you forget to add this domain to the trusted domains list on the Hexclave dashboard?",
+      },
+      "headers": Headers {
+        "set-cookie": <deleting cookie 'stack-oauth-inner-<stripped cookie name key>' at path '/'>,
+        "x-stack-known-error": "REDIRECT_URL_NOT_WHITELISTED",
+        <some fields may have been hidden>,
+      },
+    }
+  `);
+});
+

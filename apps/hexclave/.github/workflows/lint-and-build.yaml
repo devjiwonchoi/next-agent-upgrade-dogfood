@@ -1,0 +1,121 @@
+name: Lint & build
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+  pull_request:
+
+# A concurrency group only ever runs one run at a time, so the sha is part of the group on main/dev:
+# otherwise consecutive dev pushes queue behind each other (and GitHub cancels the older queued run),
+# so one slow or hung run silently skips CI for every commit after it. PRs and feature branches stay
+# grouped per ref, where cancelling superseded runs is what we want.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev') && format('-{0}', github.sha) || '' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/dev' }}
+
+jobs:
+  lint_and_build:
+    timeout-minutes: 60
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node-version: [24]
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Create .env.production.local file for apps/backend
+        run: cp apps/backend/.env.development apps/backend/.env.production.local
+
+      - name: Create .env.production.local file for apps/dashboard
+        run: cp apps/dashboard/.env.development apps/dashboard/.env.production.local
+      
+      - name: Create .env.production.local file for apps/e2e
+        run: cp apps/e2e/.env.development apps/e2e/.env.production.local
+
+      - name: Create .env.production.local file for examples/cjs-test
+        run: cp examples/cjs-test/.env.development examples/cjs-test/.env.production.local
+      
+      - name: Create .env.production.local file for examples/demo
+        run: cp examples/demo/.env.development examples/demo/.env.production.local
+
+      - name: Create .env.production.local file for examples/docs-examples
+        run: cp examples/docs-examples/.env.development examples/docs-examples/.env.production.local
+
+      - name: Create .env.production.local file for examples/e-commerce
+        run: cp examples/e-commerce/.env.development examples/e-commerce/.env.production.local
+
+      - name: Create .env.production.local file for examples/middleware
+        run: cp examples/middleware/.env.development examples/middleware/.env.production.local
+
+      - name: Create .env.production.local file for examples/supabase
+        run: cp examples/supabase/.env.development examples/supabase/.env.production.local
+
+      - name: Create .env.production.local file for examples/convex
+        run: cp examples/convex/.env.development examples/convex/.env.production.local
+
+      - name: Create .env.production.local file for apps/internal-tool
+        run: cp apps/internal-tool/.env.development apps/internal-tool/.env.production.local
+
+      - name: Build
+        run: pnpm build
+        
+      - name: Lint
+        run: pnpm lint
+      
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Store Quetzal API key in packages/next/.env.local to prepare for code gen
+        run: echo "QUETZAL_API_KEY=${{ secrets.QUETZAL_API_KEY }}" > packages/next/.env.local
+
+      - name: Run code gen  # so we can check for uncommitted changes afterwards; `build` doesn't regenerate some committed files, eg. Quetzal
+        run: pnpm codegen
+      
+      - name: Check for uncommitted changes
+        run: |
+          if [[ -n $(git status --porcelain) ]]; then
+            echo "Error: There are uncommitted changes after build/lint/typecheck."
+            echo "Please commit all changes before pushing."
+            echo ""
+            echo "Files with uncommitted changes:"
+            git status --porcelain
+            echo ""
+            echo "Full git status:"
+            git status
+            echo ""
+            echo "Diff of changes:"
+            git diff
+            exit 1
+          fi
+      
+      - name: Check for uncommitted changes
+        run: |
+          if [[ -n $(git status --porcelain) ]]; then
+            echo "Error: There are uncommitted changes after build/lint/typecheck."
+            echo "Please commit all changes before pushing."
+            echo ""
+            echo "Files with uncommitted changes:"
+            git status --porcelain
+            echo ""
+            echo "Full git status:"
+            git status
+            echo ""
+            echo "Diff of changes:"
+            git diff
+            exit 1
+          fi

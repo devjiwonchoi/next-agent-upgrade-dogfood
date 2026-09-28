@@ -1,0 +1,110 @@
+import { GET, POST, PUT, DELETE } from '@/web/common/api/request';
+import type {
+  GetPathProps,
+  ParentTreePathItemType
+} from '@fastgpt/global/common/parentFolder/type';
+import type { DatasetItemType, DatasetSimpleItemType } from '@fastgpt/global/core/dataset/type';
+import type { PostDatasetSyncParams } from '@fastgpt/global/openapi/core/dataset/api';
+import type {
+  BatchResourceActionResponse,
+  BatchResourceDeleteBody,
+  BatchResourceMoveBody
+} from '@fastgpt/global/openapi/common/batch/api';
+import type {
+  CreateDatasetBody,
+  CreateDatasetWithFilesBody,
+  CreateDatasetWithFilesResponse,
+  GetDatasetListBody,
+  GetDatasetListResponse,
+  GetDatasetListV2Body,
+  GetDatasetListV2Response,
+  UpdateDatasetBody,
+  CreateDatasetFolderBody,
+  SearchDatasetTestBody,
+  SearchDatasetTestResponse,
+  GetDatasetPermissionResponse,
+  ChangeDatasetOwnerBody,
+  EnableCollectionPermissionBody,
+  EnableCollectionPermissionResponse,
+  DisableCollectionPermissionBody,
+  DisableCollectionPermissionResponse
+} from '@fastgpt/global/openapi/core/dataset/api';
+
+/* ======================== dataset ======================= */
+export const getDatasets = (data: GetDatasetListBody) =>
+  POST<GetDatasetListResponse>(`/core/dataset/list`, data, { maxQuantity: 1 });
+
+export const getDatasetsV2 = (data: GetDatasetListV2Body, cancelToken?: AbortController) =>
+  POST<GetDatasetListV2Response>(`/core/dataset/listV2`, data, {
+    maxQuantity: 1,
+    cancelToken
+  });
+
+/** 获取当前筛选条件下的全部知识库，供需要跨页遍历资源的选择器使用。 */
+export const getAllDatasets = (data: GetDatasetListBody = {}) => getDatasets(data);
+
+export const getDatasetsByAppIdAndDatasetIds = (data: { appId: string; datasetIdList: string[] }) =>
+  POST<DatasetSimpleItemType[]>(`/core/dataset/listByAppIdAndDatasetIds`, data);
+
+export const getDatasetPaths = (data: GetPathProps) => {
+  if (!data.sourceId) return Promise.resolve([]);
+  return GET<ParentTreePathItemType[]>('/core/dataset/paths', data);
+};
+
+export const getDatasetById = (id: string) => GET<DatasetItemType>(`/core/dataset/detail?id=${id}`);
+
+export const postCreateDataset = (data: CreateDatasetBody) =>
+  POST<string>(`/core/dataset/create`, data);
+
+export const postCreateDatasetWithFiles = (data: CreateDatasetWithFilesBody) =>
+  POST<CreateDatasetWithFilesResponse>(`/core/dataset/createWithFiles`, data);
+
+export const putDatasetById = (data: UpdateDatasetBody) => PUT<void>(`/core/dataset/update`, data);
+
+export const batchMoveDatasets = (data: BatchResourceMoveBody) =>
+  POST<BatchResourceActionResponse>('/core/dataset/batch/move', data);
+
+export const batchDeleteDatasets = (data: BatchResourceDeleteBody) =>
+  POST<BatchResourceActionResponse>('/core/dataset/batch/delete', data);
+
+export const delDatasetById = (id: string) => DELETE(`/core/dataset/delete?id=${id}`);
+
+export const postDatasetSync = (data: PostDatasetSyncParams) =>
+  POST(`/proApi/core/dataset/datasetSync`, data, {
+    timeout: 600000
+  });
+
+export const postCreateDatasetFolder = (data: CreateDatasetFolderBody) =>
+  POST(`/core/dataset/folder/create`, data);
+
+export const getDatasetPermission = (id?: string) =>
+  GET<GetDatasetPermissionResponse>(`/core/dataset/getPermission`, { id });
+
+export const resumeInheritPer = (datasetId: string) =>
+  PUT(`/core/dataset/resumeInheritPermission`, { datasetId });
+
+export const postChangeOwner = (data: ChangeDatasetOwnerBody) =>
+  POST(`/proApi/core/dataset/changeOwner`, data);
+
+/* =========== collection permission switch ============ */
+/**
+ * 开启知识库的数据集权限：服务端在同一请求内同步物化全部 collection 权限快照，
+ * 物化成功后才置位开关，因此耗时较长且失败时开关保持关闭。
+ */
+export const postEnableCollectionPermission = (data: EnableCollectionPermissionBody) =>
+  POST<EnableCollectionPermissionResponse>(`/core/dataset/enableCollectionPermission`, data, {
+    timeout: 600000
+  });
+
+/**
+ * 关闭知识库的数据集权限：服务端会删除全部 collection 协作者配置并重置为继承态，
+ * 属于不可回退的破坏性操作，调用方必须二次确认。
+ */
+export const postDisableCollectionPermission = (data: DisableCollectionPermissionBody) =>
+  POST<DisableCollectionPermissionResponse>(`/core/dataset/disableCollectionPermission`, data, {
+    timeout: 600000
+  });
+
+/* =========== search test ============ */
+export const postSearchText = (data: SearchDatasetTestBody) =>
+  POST<SearchDatasetTestResponse>(`/core/dataset/searchTest`, data);

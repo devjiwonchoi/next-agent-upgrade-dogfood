@@ -1,0 +1,52 @@
+import { expect, it } from "vitest";
+import { defineStackConfig, type StackConfig } from "./config-authoring";
+import { typeAssertExtends } from "./utils/types";
+
+const validConfig = defineStackConfig({
+  payments: {
+    items: {
+      todos: {
+        displayName: "Todo Slots",
+        customerType: "user",
+      },
+    },
+  },
+});
+const showOnboardingConfig = defineStackConfig("show-onboarding");
+
+typeAssertExtends<typeof validConfig, StackConfig>()();
+typeAssertExtends<typeof showOnboardingConfig, StackConfig>()();
+
+it("returns its input unchanged", () => {
+  expect(defineStackConfig(validConfig)).toBe(validConfig);
+  expect(defineStackConfig(showOnboardingConfig)).toBe(showOnboardingConfig);
+});
+
+defineStackConfig({
+  // @ts-expect-error Top-level dot notation should not be accepted in typed config files.
+  "payments.items": {
+    todos: {
+      displayName: "Todo Slots",
+      customerType: "user",
+    },
+  },
+});
+
+defineStackConfig({
+  payments: {
+    // @ts-expect-error Unknown keys should not be accepted in typed config files.
+    missingField: true,
+  },
+});
+
+defineStackConfig({
+  payments: {
+    items: {
+      todos: {
+        displayName: "Todo Slots",
+        // @ts-expect-error Invalid enum values should fail type-checking.
+        customerType: "workspace",
+      },
+    },
+  },
+});

@@ -1,0 +1,125 @@
+import { createAuthTokens } from "@/lib/tokens";
+import { logSignInAttemptInBackground } from "@/lib/compliance-events";
+import { getPrismaClientForTenancy } from "@/prisma-client";
+import { createVerificationCodeHandler } from "@/route-handlers/verification-code-handler";
+import { verifyTOTP } from "@oslojs/otp";
+import { VerificationCodeType } from "@/generated/prisma/client";
+import { KnownErrors } from "@hexclave/shared";
+import { ProjectsCrud } from "@hexclave/shared/dist/interface/crud/projects";
+import { signInResponseSchema, yupBoolean, yupNumber, yupObject, yupString } from "@hexclave/shared/dist/schema-fields";
+import { HexclaveAssertionError } from "@hexclave/shared/dist/utils/errors";
+
+export const mfaVerificationCodeHandler = createVerificationCodeHandler({
+  metadata: {
+    post: {
+      summary: "MFA sign in",
+      description: "Complete multi-factor authorization to sign in, with a TOTP and an MFA attempt code",
+      tags: ["OTP"],
+    },
+    check: {
+      summary: "Verify MFA",
+      description: "Check if the MFA attempt is valid without using it",
+      tags: ["OTP"],
+    }
+  },
+  type: VerificationCodeType.ONE_TIME_PASSWORD,
+  data: yupObject({
+    user_id: yupString().defined(),
+    is_new_user: yupBoolean().defined(),
+    method: yupString().oneOf(["password", "otp", "passkey", "oauth"]).optional(),
+    email: yupString().optional(),
+    oauth_provider: yupString().optional(),
+  }),
+  method: yupObject({}),
+  requestBody: yupObject({
+    type: yupString().oneOf(["totp"]).defined(),
+    totp: yupString().defined(),
+  }),
+  response: yupObject({
+    statusCode: yupNumber().oneOf([200]).defined(),
+    bodyType: yupString().oneOf(["json"]).defined(),
+    body: signInResponseSchema.defined(),
+  }),
+  async validate(tenancy, method, data, body) {
+    const prisma = await getPrismaClientForTenancy(tenancy);
+    const user = await prisma.projectUser.findUniqueOrThrow({
+      where: {
+        tenancyId_projectUserId: {
+          tenancyId: tenancy.id,
+          projectUserId: data.user_id,
+        },
+      },
+    });
+    const totpSecret = user.totpSecret;
+    if (!totpSecret) {
+      throw new HexclaveAssertionError("User does not have a TOTP secret", { user });
+    }
+    const isTotpValid = verifyTOTP(totpSecret, 30, 6, body.totp);
+    if (!isTotpValid) {
+      if (data.method != null) {
+        logSignInAttemptInBackground(tenancy, {
+          outcome: "failed",
+          method: data.method,
+          failureReason: "invalid_mfa_totp",
+          email: data.email ?? null,
+          oauthProvider: data.oauth_provider ?? null,
+          userId: data.user_id,
+        });
+      }
+      throw new KnownErrors.InvalidTotpCode();
+    }
+  },
+  async handler(tenancy, {}, data, body, _user, apiUrl) {
+    const { refreshToken, accessToken } = await createAuthTokens({
+      tenancy,
+      projectUserId: data.user_id,
+      apiUrl,
+    });
+    if (data.method != null) {
+      logSignInAttemptInBackground(tenancy, {
+        outcome: "success",
+        method: data.method,
+        email: data.email ?? null,
+        oauthProvider: data.oauth_provider ?? null,
+        userId: data.user_id,
+      });
+    }
+
+    return {
+      statusCode: 200,
+      bodyType: "json",
+      body: {
+        refresh_token: refreshToken,
+        access_token: accessToken,
+        is_new_user: data.is_new_user,
+        user_id: data.user_id,
+      },
+    };
+  },
+});
+
+export async function createMfaRequiredError(options: {
+  project: Omit<ProjectsCrud["Admin"]["Read"], "config">,
+  branchId: string,
+  isNewUser: boolean,
+  userId: string,
+  method?: "password" | "otp" | "passkey" | "oauth",
+  email?: string,
+  oauthProvider?: string,
+}) {
+  const attemptCode = await mfaVerificationCodeHandler.createCode({
+    expiresInMs: 1000 * 60 * 5,
+    project: options.project,
+    branchId: options.branchId,
+    data: {
+      user_id: options.userId,
+      is_new_user: options.isNewUser,
+      ...(options.method == null ? {} : { method: options.method }),
+      ...(options.email == null ? {} : { email: options.email }),
+      ...(options.oauthProvider == null ? {} : { oauth_provider: options.oauthProvider }),
+    },
+    method: {},
+    callbackUrl: undefined,
+  });
+  return new KnownErrors.MultiFactorAuthenticationRequired(attemptCode.code);
+}

@@ -1,0 +1,115 @@
+import { FixedTableContainer } from '@fastgpt/web/components/common/FixedTable';
+import { ModelStatusLabel } from '@/components/Select/ModelStatusLabel';
+import { useModelSummary } from '@/web/core/ai/model/useModelSummary';
+import { Flex, Table, Tbody, Td, Th, Thead, Tr } from '@chakra-ui/react';
+import {
+  DatasetSearchModeEnum,
+  DatasetSearchModeMap
+} from '@fastgpt/global/core/dataset/constants';
+import MyIcon from '@fastgpt/web/components/common/Icon';
+import { useTranslation } from 'next-i18next';
+import React from 'react';
+
+const SearchParamsTip = ({
+  searchMode,
+  similarity = 0,
+  limit = 5000,
+  responseEmptyText,
+  usingReRank = false,
+  usingExtensionQuery,
+  queryExtensionModel
+}: {
+  searchMode: `${DatasetSearchModeEnum}`;
+  similarity?: number;
+  limit?: number;
+  responseEmptyText?: string;
+  usingReRank?: boolean;
+  usingExtensionQuery?: boolean;
+  queryExtensionModel?: string;
+}) => {
+  const { t } = useTranslation();
+  const detailState = useModelSummary({
+    modelId: usingExtensionQuery ? queryExtensionModel : undefined
+  });
+
+  const hasReRankModel = true;
+  const hasEmptyResponseMode = responseEmptyText !== undefined;
+  const hasSimilarityMode = usingReRank || searchMode === DatasetSearchModeEnum.embedding;
+
+  return (
+    <FixedTableContainer
+      bg={'primary.50'}
+      borderRadius={'lg'}
+      borderWidth={'1px'}
+      borderColor={'primary.1'}
+      sx={{
+        '&::-webkit-scrollbar': {
+          height: '6px',
+          borderRadius: '4px'
+        },
+        '&::-webkit-scrollbar-thumb': {
+          backgroundColor: 'myGray.250 !important',
+          '&:hover': {
+            backgroundColor: 'myGray.300 !important'
+          }
+        }
+      }}
+    >
+      <Table fontSize={'xs'} overflow={'overlay'}>
+        <Thead>
+          <Tr bg={'transparent !important'}>
+            <Th fontSize={'mini'}>{t('common:core.dataset.search.search mode')}</Th>
+            <Th fontSize={'mini'}>{t('common:max_quote_tokens')}</Th>
+            <Th fontSize={'mini'}>{t('common:min_similarity')}</Th>
+            {hasReRankModel && <Th fontSize={'mini'}>{t('common:core.dataset.search.ReRank')}</Th>}
+            <Th fontSize={'mini'}>{t('common:core.module.template.Query extension')}</Th>
+            {hasEmptyResponseMode && (
+              <Th fontSize={'mini'}>{t('common:core.dataset.search.Empty result response')}</Th>
+            )}
+          </Tr>
+        </Thead>
+        <Tbody>
+          <Tr color={'myGray.800'}>
+            <Td pt={0} pb={2}>
+              <Flex alignItems={'center'}>
+                <MyIcon
+                  name={DatasetSearchModeMap[searchMode]?.icon as any}
+                  w={'12px'}
+                  mr={'1px'}
+                />
+                {t(DatasetSearchModeMap[searchMode]?.title as any)}
+              </Flex>
+            </Td>
+            <Td pt={0} pb={2}>
+              {limit}
+            </Td>
+            <Td pt={0} pb={2}>
+              {hasSimilarityMode ? similarity : t('common:core.dataset.search.Nonsupport')}
+            </Td>
+            {hasReRankModel && (
+              <Td pt={0} pb={2}>
+                {usingReRank ? '✅' : '❌'}
+              </Td>
+            )}
+            <Td pt={0} pb={2} fontSize={'mini'}>
+              {usingExtensionQuery ? (
+                <ModelStatusLabel
+                  modelId={queryExtensionModel}
+                  detail={detailState.detail}
+                  loading={detailState.loading}
+                  error={detailState.error}
+                  noTruncate
+                />
+              ) : (
+                '❌'
+              )}
+            </Td>
+            {hasEmptyResponseMode && <Th>{responseEmptyText !== '' ? '✅' : '❌'}</Th>}
+          </Tr>
+        </Tbody>
+      </Table>
+    </FixedTableContainer>
+  );
+};
+
+export default React.memo(SearchParamsTip);

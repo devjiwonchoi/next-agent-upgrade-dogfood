@@ -1,0 +1,179 @@
+import { AppTypeEnum } from '@fastgpt/global/core/app/constants';
+import { defineIndex, Schema, getMongoModel } from '../../common/mongo';
+import type { AppSchemaType as AppType } from '@fastgpt/global/core/app/type';
+import {
+  TeamCollectionName,
+  TeamMemberCollectionName
+} from '@fastgpt/global/support/user/team/constant';
+
+export const AppCollectionName = 'apps';
+
+export const chatConfigType = {
+  welcomeText: String,
+  welcomeConfig: Object,
+  variables: Array,
+  questionGuide: Object,
+  ttsConfig: Object,
+  whisperConfig: Object,
+  scheduledTriggerConfig: Object,
+  chatInputGuide: Object,
+  fileSelectConfig: Object,
+  entryPoints: Array,
+  instruction: String,
+  autoExecute: Object
+};
+
+// schema
+const AppSchema = new Schema(
+  {
+    parentId: {
+      type: Schema.Types.ObjectId,
+      ref: AppCollectionName,
+      default: null
+    },
+    teamId: {
+      type: Schema.Types.ObjectId,
+      ref: TeamCollectionName,
+      required: true
+    },
+    tmbId: {
+      type: Schema.Types.ObjectId,
+      ref: TeamMemberCollectionName,
+      required: true
+    },
+    name: {
+      type: String,
+      required: true
+    },
+    type: {
+      type: String,
+      default: AppTypeEnum.workflow,
+      enum: Object.values(AppTypeEnum)
+    },
+    version: {
+      type: String,
+      enum: ['v1', 'v2']
+    },
+    avatar: String,
+    intro: {
+      type: String,
+      default: ''
+    },
+    templateId: String,
+
+    updateTime: {
+      type: Date,
+      default: () => new Date()
+    },
+    createTime: {
+      type: Date,
+      default: () => new Date()
+    },
+
+    /** @deprecated 仅供旧版本兼容和回滚，正常工作流使用 app_versions.nodes */
+    modules: {
+      type: Array,
+      default: undefined
+    },
+    /** @deprecated 仅供旧版本兼容和回滚，正常工作流使用 app_versions.edges */
+    edges: {
+      type: Array,
+      default: undefined
+    },
+    /** @deprecated 仅供旧版本兼容和回滚，正常工作流使用 app_versions.chatConfig */
+    chatConfig: {
+      type: chatConfigType,
+      default: undefined
+    },
+    /** @deprecated 仅供旧版本兼容、回滚和资源迁移核对 */
+    resourceRefs: {
+      type: Object,
+      default: undefined
+    },
+
+    // Tool config
+    pluginData: {
+      type: {
+        nodeVersion: String,
+        pluginUniId: String,
+        apiSchemaStr: String, // http plugin
+        customHeaders: String // http plugin
+      }
+    },
+
+    scheduledTriggerConfig: {
+      cronString: {
+        type: String
+      },
+      timezone: {
+        type: String
+      },
+      defaultPrompt: {
+        type: String
+      }
+    },
+    scheduledTriggerNextTime: {
+      type: Date
+    },
+    publishedVersionId: {
+      type: Schema.Types.ObjectId,
+      ref: 'app_versions'
+    },
+    inheritPermission: {
+      type: Boolean,
+      default: true
+    },
+
+    // Chat setting
+    favourite: Boolean,
+    quick: Boolean,
+
+    // 置顶。应用与文件夹共用，团队内共享
+    isPinned: Boolean,
+    pinnedAt: Date,
+
+    /** @deprecated */
+    defaultPermission: Number,
+    inited: Boolean,
+
+    // 软删除标记字段
+    deleteTime: {
+      type: Date,
+      default: null // null表示未删除，有值表示删除时间
+    }
+  },
+  {
+    minimize: false
+  }
+);
+
+defineIndex(AppSchema, { key: { teamId: 1, updateTime: -1 } });
+defineIndex(AppSchema, { key: { teamId: 1, createTime: 1 } });
+defineIndex(AppSchema, { key: { teamId: 1, type: 1 } });
+defineIndex(AppSchema, { key: { teamId: 1, parentId: 1 } });
+// 置顶优先排序。置顶项数量很少，只需覆盖排序前缀，不为各排序组合单独建索引
+// defineIndex(AppSchema, { key: { teamId: 1, isPinned: -1, pinnedAt: -1 } });
+
+defineIndex(AppSchema, {
+  key: { teamId: 1, deleteTime: 1, publishedVersionId: 1 }
+});
+// 旧版本回滚仍会按 resourceRefs.skillIds 反查，兼容窗口结束后再登记为 deprecated。
+defineIndex(AppSchema, { key: { teamId: 1, deleteTime: 1, 'resourceRefs.skillIds': 1 } });
+
+// Schedule
+defineIndex(AppSchema, {
+  key: { scheduledTriggerConfig: 1, scheduledTriggerNextTime: -1 },
+  options: {
+    partialFilterExpression: {
+      scheduledTriggerConfig: { $exists: true }
+    }
+  }
+});
+
+// Admin count
+defineIndex(AppSchema, { key: { type: 1 } });
+defineIndex(AppSchema, { key: { deleteTime: 1 } });
+// Admin search
+defineIndex(AppSchema, { key: { name: 1 } });
+
+export const MongoApp = getMongoModel<AppType>(AppCollectionName, AppSchema);

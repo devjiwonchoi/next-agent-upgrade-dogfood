@@ -1,0 +1,60 @@
+---
+title: "Two-Factor Authentication (2FA)"
+description: "Learn how Two-Factor Authentication works with Hexclave"
+sidebarTitle: "Two-Factor Auth"
+---
+
+This guide explains how Two-Factor Authentication (2FA) works with Hexclave. 2FA adds an extra layer of security by requiring users to provide a verification code in addition to their password.
+
+<Info>
+  Hexclave implements TOTP (Time-based One-Time Password) for two-factor authentication, which is compatible with standard authenticator apps like Google Authenticator, Microsoft Authenticator, and Authy. 2FA is enabled by default at the platform level and can be configured by individual users.
+</Info>
+
+## Integration Steps
+
+<Steps>
+  <Step title="No Developer Configuration Required">
+    2FA is enabled by default on the Hexclave platform. Unlike other authentication methods, you don't need to enable it specifically for your project.
+  </Step>
+
+  <Step title="Implement User Settings in Your Application">
+    To allow your users to set up 2FA for their accounts:
+
+    1. Make sure you've installed the right Hexclave SDK package for your framework. For example, in Next.js:
+       ```bash
+       npm install @hexclave/next
+       ```
+
+       For other frameworks, use the package shown in [Setup](/guides/getting-started/setup), such as `@hexclave/react`, `@hexclave/js`, or `@hexclave/tanstack-start`.
+
+    2. Use the Hexclave components to give users access to their account settings, where they can enable 2FA:
+
+       ```jsx
+       import { AccountSettings } from "@hexclave/next";  // replace `next` with the correct framework SDK package
+
+       export default function SettingsPage() {
+         return <AccountSettings />;
+       }
+       ```
+
+    3. The built-in Hexclave components will handle the entire 2FA setup process, including QR code generation, verification, and recovery codes.
+  </Step>
+</Steps>
+
+## How Hexclave 2FA Works
+
+Hexclave uses the industry-standard TOTP (Time-based One-Time Password) algorithm for two-factor authentication:
+
+1. **User Setup**: When a user enables 2FA in their account settings, Hexclave generates a secret key that is shared with the user's authenticator app (usually via a QR code).
+
+2. **Code Generation**: The authenticator app generates a 6-digit code that changes every 30 seconds, based on the shared secret and the current time.
+
+## Recommended Authenticator Apps
+
+The following authenticator apps are compatible with Hexclave 2FA:
+
+- Google Authenticator (Android, iOS)
+- Microsoft Authenticator (Android, iOS)
+- Authy (Android, iOS, desktop)
+- 1Password (Android, iOS, desktop)
+- LastPass Authenticator (Android, iOS)

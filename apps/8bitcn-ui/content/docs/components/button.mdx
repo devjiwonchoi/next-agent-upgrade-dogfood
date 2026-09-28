@@ -1,0 +1,112 @@
+---
+title: Button
+description: Displays a clickable 8-bit button with retro borders, variants, sizes, and font styles.
+---
+
+import { Plus } from "lucide-react";
+import { Button } from "@/components/ui/8bit/button";
+import CopyCommandButton from "@/components/copy-command-button";
+import InstallationCommands from "@/components/installation-commands";
+import ComponentPreview from "@/components/component-preview";
+
+<div className="flex flex-col md:flex-row items-center justify-end gap-2 mb-2">
+  <CopyCommandButton
+    copyCommand="pnpm dlx shadcn@latest add @8bitcn/button"
+    command="pnpm dlx shadcn@latest add @8bitcn/button"
+  />
+</div>
+
+<ComponentPreview title="8-bit button component" name="button">
+  <Button>Button</Button>
+</ComponentPreview>
+
+## Examples
+
+---
+
+### Variants
+
+<ComponentPreview title="Button variants" name="button">
+  <div className="flex flex-wrap items-center justify-center gap-4">
+    <Button>Default</Button>
+    <Button variant="secondary">Secondary</Button>
+    <Button variant="destructive">Destructive</Button>
+    <Button variant="outline">Outline</Button>
+    <Button variant="ghost">Ghost</Button>
+    <Button variant="link">Link</Button>
+  </div>
+</ComponentPreview>
+
+```tsx
+<Button>Default</Button>
+<Button variant="secondary">Secondary</Button>
+<Button variant="destructive">Destructive</Button>
+<Button variant="outline">Outline</Button>
+<Button variant="ghost">Ghost</Button>
+<Button variant="link">Link</Button>
+```
+
+### Sizes
+
+<ComponentPreview title="Button sizes" name="button">
+  <div className="flex flex-wrap items-center justify-center gap-4">
+    <Button size="sm">Small</Button>
+    <Button>Default</Button>
+    <Button size="lg">Large</Button>
+    <Button aria-label="Add item" size="icon">
+      <Plus className="size-4" />
+    </Button>
+  </div>
+</ComponentPreview>
+
+```tsx
+<Button size="sm">Small</Button>
+<Button>Default</Button>
+<Button size="lg">Large</Button>
+<Button aria-label="Add item" size="icon">
+  <Plus className="size-4" />
+</Button>
+```
+
+### Fonts
+
+<ComponentPreview title="Button fonts" name="button">
+  <div className="flex flex-wrap items-center justify-center gap-4">
+    <Button>Retro font</Button>
+    <Button font="normal">Normal font</Button>
+  </div>
+</ComponentPreview>
+
+```tsx
+<Button>Retro font</Button>
+<Button font="normal">Normal font</Button>
+```
+
+## Installation
+
+---
+
+<InstallationCommands packageName="button" />
+
+## Usage
+
+---
+
+```tsx
+import { Button } from "@/components/ui/8bit/button";
+```
+
+```tsx
+<Button variant="outline">Button</Button>
+```
+
+## Props
+
+---
+
+| Prop | Type | Default |
+| --- | --- | --- |
+| `variant` | `"default" \| "secondary" \| "destructive" \| "outline" \| "ghost" \| "link"` | `"default"` |
+| `size` | `"default" \| "sm" \| "lg" \| "icon"` | `"default"` |
+| `font` | `"retro" \| "normal"` | `"retro"` |
+| `asChild` | `boolean` | `false` |

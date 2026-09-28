@@ -1,0 +1,196 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "globalEnv": [
+    "STACK_*",
+    "HEXCLAVE_*",
+    "CRON_SECRET",
+    "CRON_SECRET_OLD",
+    "BLOB_READ_WRITE_TOKEN",
+    "NEXT_PUBLIC_*",
+    "VITE_*",
+    "NEXT_PUBLIC_SENTRY_*",
+    "SENTRY_*",
+    "VERCEL_GIT_COMMIT_SHA",
+    "NEXT_PUBLIC_POSTHOG_*",
+    "POSTHOG_*",
+    "NODE_ENV",
+    "QUETZAL_*",
+    "OTEL_*",
+    "DISCORD_WEBHOOK_URL",
+    "DISCORD_CHANNEL_ID",
+    "DISCORD_BOT_TOKEN",
+    "ENABLE_EXPERIMENTAL_COREPACK"
+  ],
+  "tasks": {
+    "build": {
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        ".env",
+        ".env.local",
+        ".env.development",
+        ".env.development.local",
+        ".env.production",
+        ".env.production.local",
+        "tsdown.config.ts"
+      ],
+      "dependsOn": [
+        "^build"
+      ],
+      "outputs": [
+        ".next/**",
+        "!.next/cache/**",
+        "!.next/dev/**",
+        "dist/**",
+        "lib/**",
+        "*.js",
+        "*.d.ts",
+        "*.d.ts.map"
+      ],
+      "outputLogs": "new-only"
+    },
+    "build:rde-standalone": {
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        ".env",
+        ".env.local",
+        ".env.development",
+        ".env.development.local",
+        ".env.production",
+        ".env.production.local"
+      ],
+      "dependsOn": [
+        "build"
+      ],
+      "outputs": [
+        ".next/**",
+        "!.next/cache/**",
+        "!.next/dev/**",
+        "src/generated/bundled-type-definitions.ts"
+      ],
+      "outputLogs": "new-only"
+    },
+    "docker-build": {
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        ".env",
+        ".env.local",
+        ".env.development",
+        ".env.development.local",
+        ".env.production",
+        ".env.production.local"
+      ],
+      "dependsOn": [
+        "^build"
+      ],
+      "outputs": [
+        ".next/**",
+        "!.next/cache/**",
+        "!.next/dev/**",
+        "dist/**",
+        "lib/**",
+        "*.js",
+        "*.d.ts",
+        "*.d.ts.map"
+      ],
+      "outputLogs": "new-only"
+    },
+    "@hexclave/backend#build": {
+      "dependsOn": [
+        "codegen"
+      ]
+    },
+    "@hexclave/cli#build": {
+      "dependsOn": [
+        "^build"
+      ],
+      "outputs": [
+        "dist/**"
+      ]
+    },
+    "@hexclave/next#build": {
+      "dependsOn": [
+        "^build",
+        "@hexclave/template#build"
+      ]
+    },
+    "@hexclave/react#build": {
+      "dependsOn": [
+        "^build",
+        "@hexclave/template#build"
+      ]
+    },
+    "@hexclave/tanstack-start#build": {
+      "dependsOn": [
+        "^build",
+        "@hexclave/template#build"
+      ]
+    },
+    "@hexclave/js#build": {
+      "dependsOn": [
+        "^build",
+        "@hexclave/template#build"
+      ]
+    },
+    "clean": {
+      "cache": false
+    },
+    "dev": {
+      "persistent": true,
+      "cache": false
+    },
+    "//#build-packages:watch": {
+      "persistent": true,
+      "cache": false
+    },
+    "//#generate-sdks:watch": {
+      "persistent": true,
+      "cache": false
+    },
+    "//#generate-openapi-docs:watch": {
+      "persistent": true,
+      "cache": false
+    },
+    "//#generate-setup-prompt-docs:watch": {
+      "persistent": true,
+      "cache": false
+    },
+    "dev:tui": {
+      "persistent": true,
+      "cache": false
+    },
+    "start": {
+      "persistent": true,
+      "cache": false
+    },
+    "lint": {
+      "dependsOn": []
+    },
+    "codegen": {
+      "dependsOn": [
+        "^build"
+      ],
+      "cache": false
+    },
+    "typecheck": {
+      "dependsOn": []
+    },
+    "generate-keys": {
+      "cache": false
+    },
+    "db:migration-gen": {
+      "cache": false
+    },
+    "db:reset": {
+      "cache": false
+    },
+    "db:seed": {
+      "cache": false
+    },
+    "db:init": {
+      "cache": false
+    },
+    "db:migrate": {
+      "cache": false
+    }
+  }
+}

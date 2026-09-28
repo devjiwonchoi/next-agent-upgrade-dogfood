@@ -1,0 +1,804 @@
+import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { FlowNodeTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
+import {
+  VariableInputEnum,
+  WorkflowIOValueTypeEnum
+} from '@fastgpt/global/core/workflow/constants';
+import { WorkflowVariableState } from '@fastgpt/service/core/workflow/dispatch/utils/variables';
+import { summarizeRuntimeNodeResponses } from '@fastgpt/service/core/workflow/dispatch/utils/summary';
+import { ChatFileTypeEnum, ChatSourceTypeEnum } from '@fastgpt/global/core/chat/constants';
+import { prepareWorkflowFileContext } from '@fastgpt/service/core/workflow/utils/fileContext';
+import {
+  getWorkflowFileContext,
+  runWithContext
+} from '@fastgpt/service/core/workflow/utils/context';
+
+const mocks = vi.hoisted(() => ({
+  runWorkflow: vi.fn(),
+  authAppByTmbId: vi.fn(),
+  getAppVersionById: vi.fn(),
+  serverGetWorkflowToolRunUserQuery: vi.fn(),
+  getSystemToolWorkflowRuntime: vi.fn()
+}));
+
+vi.mock('@fastgpt/service/core/workflow/dispatch', () => ({
+  runWorkflow: (args: any) => mocks.runWorkflow(args)
+}));
+
+vi.mock('@fastgpt/service/support/permission/app/auth', () => ({
+  authAppByTmbId: mocks.authAppByTmbId
+}));
+
+vi.mock('@fastgpt/service/core/app/version/controller', () => ({
+  getAppVersionById: mocks.getAppVersionById,
+  getAppPublishedWorkflowMap: vi.fn(async () => new Map())
+}));
+
+vi.mock('@fastgpt/service/support/user/team/utils', () => ({
+  getUserChatInfo: vi.fn().mockResolvedValue({ externalProvider: undefined })
+}));
+
+vi.mock('@fastgpt/service/core/app/tool/workflowTool/utils', () => ({
+  serverGetWorkflowToolRunUserQuery: (args: any) => mocks.serverGetWorkflowToolRunUserQuery(args)
+}));
+
+vi.mock('@fastgpt/service/core/app/tool/systemTool/systemTool.repo', () => ({
+  SystemToolRepo: {
+    getInstance: () => ({
+      getSystemToolWorkflowRuntime: mocks.getSystemToolWorkflowRuntime
+    })
+  }
+}));
+
+import {
+  dispatchApp,
+  dispatchPlugin
+} from '@fastgpt/service/core/workflow/dispatch/ai/agent/sub/app';
+
+const createVariableState = () =>
+  WorkflowVariableState.create({
+    timezone: 'Asia/Shanghai',
+    runningAppInfo: {
+      sourceType: 'app',
+      sourceId: 'parent-app',
+      teamId: 'team',
+      tmbId: 'member',
+      name: 'parent'
+    },
+    uid: 'user',
+    chatId: 'chat',
+    responseChatItemId: 'response',
+    histories: [],
+    variablesConfig: []
+  });
+
+describe('agent sub app dispatchPlugin', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.serverGetWorkflowToolRunUserQuery.mockReturnValue({ value: [] });
+    mocks.runWorkflow.mockResolvedValue({
+      flowUsages: [],
+      workflowRuntimeSummary: summarizeRuntimeNodeResponses(undefined, [
+        {
+          id: 'pluginOutputResponse',
+          nodeId: 'pluginOutput',
+          moduleName: 'Output',
+          moduleType: FlowNodeTypeEnum.pluginOutput,
+          pluginOutput: { result: 'ok' }
+        }
+      ])
+    });
+  });
+
+  const dispatchSystemWorkflow = async () =>
+    dispatchPlugin({
+      app: {
+        id: 'associated-app',
+        name: 'System Workflow',
+        systemToolId: 'commercial-system-workflow'
+      },
+      runningAppInfo: {
+        sourceType: 'app',
+        sourceId: 'parent-app',
+        teamId: 'team',
+        tmbId: 'member',
+        name: 'parent'
+      },
+      runningUserInfo: {
+        teamId: 'team',
+        tmbId: 'member'
+      },
+      customAppVariables: {},
+      userChatInput: '',
+      timezone: 'Asia/Shanghai',
+      uid: 'user',
+      chatId: 'chat',
+      responseChatItemId: 'response',
+      histories: [],
+      variableState: await createVariableState(),
+      checkIsStopping: vi.fn(() => false),
+      maxRunTimes: 20,
+      workflowDispatchDeep: 0,
+      stream: true
+    } as any);
+
+  it('keeps Agent V2 child workflow execution non-streaming', async () => {
+    mocks.getSystemToolWorkflowRuntime.mockResolvedValue({
+      id: 'commercial-system-workflow',
+      name: 'System Workflow',
+      avatar: '',
+      nodes: [],
+      edges: [],
+      chatConfig: { variables: [] },
+      currentCost: 0
+    });
+    await dispatchSystemWorkflow();
+    expect(mocks.runWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: false,
+        workflowStreamResponse: undefined
+      })
+    );
+  });
+
+  it('does not expose system workflow LLM tokens to the parent agent summary', async () => {
+    mocks.getSystemToolWorkflowRuntime.mockResolvedValue({
+      id: 'commercial-system-workflow',
+      name: 'System Workflow',
+      avatar: '',
+      nodes: [],
+      edges: [],
+      chatConfig: { variables: [] },
+      currentCost: 0
+    });
+    mocks.runWorkflow.mockResolvedValue({
+      flowUsages: [],
+      workflowRuntimeSummary: {
+        ...summarizeRuntimeNodeResponses(undefined, []),
+        llmInputTokens: 20,
+        llmOutputTokens: 5
+      }
+    });
+
+    const result = await dispatchSystemWorkflow();
+
+    expect(result.nodeSummary).toBeUndefined();
+  });
+
+  it('initializes workflow tool variables from child chatConfig', async () => {
+    mocks.authAppByTmbId.mockResolvedValue({
+      app: {
+        _id: 'child-app',
+        name: 'Child Workflow Tool',
+        teamId: 'child-team',
+        tmbId: 'child-member'
+      }
+    });
+    mocks.getAppVersionById.mockResolvedValue({
+      resources: [],
+      nodes: [
+        {
+          nodeId: 'pluginInput',
+          name: 'Input',
+          flowNodeType: FlowNodeTypeEnum.pluginInput,
+          inputs: [
+            {
+              key: 'query',
+              defaultValue: 'default query',
+              renderTypeList: []
+            },
+            {
+              key: 'internal',
+              defaultValue: 'internal default',
+              renderTypeList: ['hidden']
+            }
+          ],
+          outputs: []
+        },
+        {
+          nodeId: 'pluginOutput',
+          name: 'Output',
+          flowNodeType: FlowNodeTypeEnum.pluginOutput,
+          inputs: [{ key: 'result', isToolOutput: true }],
+          outputs: []
+        }
+      ],
+      edges: [],
+      chatConfig: {
+        variables: [
+          {
+            key: 'counter',
+            label: 'counter',
+            type: VariableInputEnum.numberInput,
+            valueType: WorkflowIOValueTypeEnum.number,
+            defaultValue: 0,
+            description: ''
+          }
+        ]
+      }
+    });
+
+    await dispatchPlugin({
+      app: {
+        id: 'child-app',
+        name: 'Child Workflow Tool',
+        version: 'plugin-fixed-version'
+      },
+      runningAppInfo: {
+        sourceType: 'app',
+        sourceId: 'parent-app',
+        teamId: 'team',
+        tmbId: 'member',
+        name: 'parent'
+      },
+      runningUserInfo: {
+        teamId: 'team',
+        tmbId: 'member'
+      },
+      customAppVariables: {
+        query: 'hello',
+        internal: 'external value'
+      },
+      userChatInput: '',
+      timezone: 'Asia/Shanghai',
+      uid: 'user',
+      chatId: 'chat',
+      responseChatItemId: 'response',
+      histories: [],
+      variableState: await createVariableState(),
+      checkIsStopping: vi.fn(() => false),
+      maxRunTimes: 20,
+      workflowDispatchDeep: 0
+    } as any);
+
+    expect(mocks.runWorkflow).toHaveBeenCalledTimes(1);
+    expect(mocks.getAppVersionById).toHaveBeenCalledWith(
+      expect.objectContaining({
+        appId: 'child-app',
+        versionId: 'plugin-fixed-version'
+      })
+    );
+    expect(mocks.runWorkflow.mock.calls[0][0].variableState.get('counter')).toBe(0);
+    expect(mocks.serverGetWorkflowToolRunUserQuery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        variables: expect.objectContaining({
+          counter: 0,
+          query: 'hello'
+        }),
+        pluginInputs: [expect.objectContaining({ key: 'query' })]
+      })
+    );
+    expect(mocks.serverGetWorkflowToolRunUserQuery.mock.calls[0][0].pluginInputs).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ key: 'internal' })])
+    );
+    expect(mocks.runWorkflow.mock.calls[0][0].runtimeNodes[0].inputs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: 'internal', value: 'internal default' })
+      ])
+    );
+  });
+
+  it.each([
+    {
+      hasTokenFee: true,
+      expectedPoints: 13,
+      title: 'call cost and child usage'
+    },
+    {
+      hasTokenFee: false,
+      expectedPoints: 10,
+      title: 'call cost only'
+    }
+  ])('charges system workflow $title', async ({ hasTokenFee, expectedPoints }) => {
+    mocks.authAppByTmbId.mockRejectedValue(new Error('unAuthApp'));
+    mocks.getSystemToolWorkflowRuntime.mockResolvedValue({
+      id: 'commercial-system-workflow',
+      name: 'System Workflow',
+      nodes: [],
+      edges: [],
+      currentCost: 10,
+      systemKeyCost: 100,
+      hasTokenFee,
+      chatConfig: {
+        variables: []
+      }
+    });
+    mocks.runWorkflow.mockResolvedValueOnce({
+      flowUsages: [{ moduleName: 'Child token/tool usage', totalPoints: 3 }],
+      workflowRuntimeSummary: summarizeRuntimeNodeResponses(undefined, [
+        {
+          id: 'pluginOutputResponse',
+          nodeId: 'pluginOutput',
+          moduleName: 'Output',
+          moduleType: FlowNodeTypeEnum.pluginOutput,
+          pluginOutput: { result: 'ok' }
+        }
+      ])
+    });
+
+    const result = await dispatchSystemWorkflow();
+
+    expect(mocks.getSystemToolWorkflowRuntime).toHaveBeenCalledWith({
+      pluginId: 'commercial-system-workflow',
+      version: undefined
+    });
+    expect(mocks.authAppByTmbId).not.toHaveBeenCalled();
+    expect(mocks.getAppVersionById).not.toHaveBeenCalled();
+    expect(mocks.runWorkflow).toHaveBeenCalledTimes(1);
+    expect(result.errorMessage).toBeUndefined();
+    expect(result.usages).toEqual([
+      {
+        moduleName: 'System Workflow',
+        totalPoints: expectedPoints
+      }
+    ]);
+    expect(result.nodeResponse?.totalPoints).toBe(10);
+    expect(result.nodeSummary?.totalPoints).toBe(hasTokenFee ? 3 : undefined);
+  });
+
+  it('does not charge a system workflow when its child run fails', async () => {
+    mocks.getSystemToolWorkflowRuntime.mockResolvedValue({
+      id: 'commercial-system-workflow',
+      name: 'System Workflow',
+      nodes: [],
+      edges: [],
+      currentCost: 10,
+      hasTokenFee: true,
+      chatConfig: { variables: [] }
+    });
+    mocks.runWorkflow.mockResolvedValueOnce({
+      flowUsages: [{ moduleName: 'Failed child usage', totalPoints: 3 }],
+      workflowRuntimeSummary: summarizeRuntimeNodeResponses(undefined, [
+        {
+          id: 'failedResponse',
+          nodeId: 'failedNode',
+          moduleName: 'Failed node',
+          moduleType: FlowNodeTypeEnum.systemConfig,
+          errorText: 'child failed'
+        }
+      ])
+    });
+
+    const result = await dispatchSystemWorkflow();
+
+    expect(result.errorMessage).toBe('child failed');
+    expect(result.usages).toEqual([
+      {
+        moduleName: 'System Workflow',
+        totalPoints: 0
+      }
+    ]);
+  });
+
+  it('treats pluginOutput.error as a failed tool response', async () => {
+    mocks.getSystemToolWorkflowRuntime.mockResolvedValue({
+      id: 'commercial-system-workflow',
+      name: 'System Workflow',
+      nodes: [],
+      edges: [],
+      currentCost: 10,
+      hasTokenFee: true,
+      chatConfig: { variables: [] }
+    });
+    mocks.runWorkflow.mockResolvedValueOnce({
+      flowUsages: [{ moduleName: 'Child usage', totalPoints: 3 }],
+      workflowRuntimeSummary: summarizeRuntimeNodeResponses(undefined, [
+        {
+          id: 'pluginOutputResponse',
+          nodeId: 'pluginOutput',
+          moduleName: 'Output',
+          moduleType: FlowNodeTypeEnum.pluginOutput,
+          pluginOutput: { error: 'upstream unavailable' }
+        }
+      ])
+    });
+
+    const result = await dispatchSystemWorkflow();
+
+    expect(result.errorMessage).toBe('upstream unavailable');
+    expect(result.usages).toEqual([
+      {
+        moduleName: 'System Workflow',
+        totalPoints: 0
+      }
+    ]);
+    expect(result.nodeResponse).toMatchObject({
+      toolRes: { error: 'upstream unavailable' },
+      errorText: 'upstream unavailable'
+    });
+  });
+
+  it('inherits child workflow tool default file variables from the parent context', async () => {
+    const defaultKey = 'chat/app/parent-app/user/chat/default.pdf';
+    const defaultUrl = 'https://files.example.com/default';
+    const defaultFile = {
+      key: defaultKey,
+      name: 'default.pdf',
+      type: ChatFileTypeEnum.file
+    };
+    const { fileContext, fileRegistrar } = await prepareWorkflowFileContext({
+      query: [{ file: { ...defaultFile, url: '' } }],
+      histories: [],
+      scope: {
+        sourceType: ChatSourceTypeEnum.app,
+        sourceId: 'parent-app',
+        uid: 'user',
+        chatId: 'chat'
+      },
+      maxFileAmount: 20,
+      getPreviewUrl: vi.fn().mockResolvedValue(defaultUrl)
+    });
+    mocks.authAppByTmbId.mockResolvedValue({
+      app: {
+        _id: 'child-app',
+        name: 'Child Workflow Tool',
+        teamId: 'child-team',
+        tmbId: 'child-member'
+      }
+    });
+    mocks.getAppVersionById.mockResolvedValue({
+      resources: [],
+      nodes: [
+        {
+          nodeId: 'pluginInput',
+          name: 'Input',
+          flowNodeType: FlowNodeTypeEnum.pluginInput,
+          inputs: [],
+          outputs: []
+        },
+        {
+          nodeId: 'pluginOutput',
+          name: 'Output',
+          flowNodeType: FlowNodeTypeEnum.pluginOutput,
+          inputs: [{ key: 'result', isToolOutput: true }],
+          outputs: []
+        }
+      ],
+      edges: [],
+      chatConfig: {
+        variables: [
+          {
+            key: 'defaultFiles',
+            label: 'defaultFiles',
+            type: VariableInputEnum.file,
+            valueType: WorkflowIOValueTypeEnum.arrayString,
+            defaultValue: [defaultFile],
+            description: ''
+          }
+        ]
+      }
+    });
+    mocks.runWorkflow.mockImplementationOnce(async (props) => {
+      expect(getWorkflowFileContext()?.resolve(defaultUrl)?.source).toEqual({
+        type: 'chatObject',
+        objectKey: defaultKey
+      });
+      expect(props.variableState.get('defaultFiles')).toEqual([defaultUrl]);
+      return {
+        flowUsages: [],
+        workflowRuntimeSummary: summarizeRuntimeNodeResponses(undefined, [
+          {
+            id: 'pluginOutputResponse',
+            nodeId: 'pluginOutput',
+            moduleName: 'Output',
+            moduleType: FlowNodeTypeEnum.pluginOutput,
+            pluginOutput: { result: 'ok' }
+          }
+        ])
+      };
+    });
+    const variableState = await createVariableState();
+
+    await runWithContext(
+      {
+        mcpClientMemory: {},
+        fileContext,
+        fileRegistrar
+      },
+      () =>
+        dispatchPlugin({
+          app: { id: 'child-app', name: 'Child Workflow Tool' },
+          runningAppInfo: {
+            sourceType: 'app',
+            sourceId: 'parent-app',
+            teamId: 'team',
+            tmbId: 'member',
+            name: 'parent'
+          },
+          runningUserInfo: { teamId: 'team', tmbId: 'member' },
+          customAppVariables: {},
+          userChatInput: '',
+          timezone: 'Asia/Shanghai',
+          uid: 'user',
+          chatId: 'chat',
+          responseChatItemId: 'response',
+          histories: [],
+          variableState,
+          checkIsStopping: vi.fn(() => false),
+          maxRunTimes: 20,
+          workflowDispatchDeep: 0
+        } as any)
+    );
+  });
+
+  it('returns plugin child interactive state and forwards lastInteractive on resume', async () => {
+    const previousInteractive = {
+      type: 'userSelect',
+      entryNodeIds: ['select_1'],
+      memoryEdges: [{ source: 'before', target: 'select_1', status: 'active' }],
+      nodeOutputs: [{ nodeId: 'select_1', key: 'result', value: 'restored' }]
+    };
+    const nextInteractive = {
+      type: 'userInput',
+      entryNodeIds: ['input_2']
+    };
+    mocks.authAppByTmbId.mockResolvedValue({
+      app: {
+        _id: 'child-plugin',
+        name: 'Child Plugin',
+        teamId: 'child-team',
+        tmbId: 'child-member'
+      }
+    });
+    mocks.getAppVersionById.mockResolvedValue({
+      resources: [],
+      nodes: [
+        {
+          nodeId: 'select_1',
+          name: 'Input',
+          flowNodeType: FlowNodeTypeEnum.pluginInput,
+          inputs: [],
+          outputs: [{ key: 'result', value: 'initial' }]
+        }
+      ],
+      edges: [
+        { source: 'before', sourceHandle: 'output', target: 'select_1', targetHandle: 'input' }
+      ],
+      chatConfig: { variables: [] }
+    });
+    mocks.runWorkflow.mockResolvedValue({
+      assistantResponses: [{ text: { content: 'waiting for plugin input' } }],
+      flowUsages: [],
+      workflowRuntimeSummary: undefined,
+      workflowInteractiveResponse: nextInteractive
+    });
+
+    const result = await dispatchPlugin({
+      app: {
+        id: 'child-plugin',
+        name: 'Child Plugin'
+      },
+      runningAppInfo: {
+        sourceType: 'app',
+        sourceId: 'parent-app',
+        teamId: 'team',
+        tmbId: 'member',
+        name: 'parent'
+      },
+      runningUserInfo: {
+        teamId: 'team',
+        tmbId: 'member'
+      },
+      customAppVariables: {},
+      userChatInput: '',
+      timezone: 'Asia/Shanghai',
+      uid: 'user',
+      chatId: 'chat',
+      responseChatItemId: 'response',
+      variableState: await createVariableState(),
+      checkIsStopping: vi.fn(() => false),
+      maxRunTimes: 20,
+      workflowDispatchDeep: 0,
+      lastInteractive: previousInteractive,
+      query: [{ text: { content: '{"selection":"Confirm"}' } }]
+    } as any);
+
+    expect(mocks.runWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lastInteractive: previousInteractive,
+        query: [{ text: { content: '{"selection":"Confirm"}' } }],
+        runtimeEdges: previousInteractive.memoryEdges,
+        runtimeNodes: [
+          expect.objectContaining({
+            nodeId: 'select_1',
+            isEntry: true,
+            outputs: [{ key: 'result', value: 'restored' }]
+          })
+        ]
+      })
+    );
+    expect(result).toMatchObject({
+      response: 'waiting for plugin input',
+      interactive: nextInteractive
+    });
+    expect(result.assistantMessages).toBeUndefined();
+  });
+});
+
+describe('agent sub app dispatchApp', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.authAppByTmbId.mockResolvedValue({
+      app: {
+        _id: 'child-app',
+        name: 'Child App',
+        teamId: 'child-team',
+        tmbId: 'child-member'
+      }
+    });
+    mocks.getAppVersionById.mockResolvedValue({
+      resources: [],
+      nodes: [],
+      edges: [],
+      chatConfig: {
+        variables: []
+      }
+    });
+  });
+
+  it('returns child response and interactive state without child transcript messages', async () => {
+    const previousInteractive = {
+      type: 'userSelect',
+      entryNodeIds: ['select_1'],
+      memoryEdges: [{ source: 'before', target: 'select_1', status: 'active' }],
+      nodeOutputs: [{ nodeId: 'select_1', key: 'result', value: 'restored' }]
+    };
+    const nextInteractive = {
+      type: 'userInput',
+      entryNodeIds: ['input_2']
+    };
+    mocks.getAppVersionById.mockResolvedValue({
+      resources: [],
+      nodes: [
+        {
+          nodeId: 'select_1',
+          name: 'Input',
+          flowNodeType: FlowNodeTypeEnum.chatNode,
+          inputs: [],
+          outputs: [{ key: 'result', value: 'initial' }]
+        }
+      ],
+      edges: [
+        { source: 'before', sourceHandle: 'output', target: 'select_1', targetHandle: 'input' }
+      ],
+      chatConfig: { variables: [] }
+    });
+    mocks.runWorkflow.mockResolvedValue({
+      assistantResponses: [
+        { text: { content: 'child answer' } },
+        {
+          tools: [
+            {
+              id: 'call_nested',
+              toolName: 'Nested tool',
+              toolAvatar: '',
+              functionName: 'nested_tool',
+              params: '{}',
+              response: 'nested result'
+            }
+          ]
+        }
+      ],
+      flowUsages: [],
+      workflowRuntimeSummary: undefined,
+      workflowInteractiveResponse: nextInteractive
+    });
+
+    const result = await dispatchApp({
+      app: {
+        id: 'child-app',
+        name: 'Child App',
+        version: 'app-fixed-version'
+      },
+      runningAppInfo: {
+        sourceType: 'app',
+        sourceId: 'parent-app',
+        teamId: 'team',
+        tmbId: 'member',
+        name: 'parent'
+      },
+      runningUserInfo: {
+        teamId: 'team',
+        tmbId: 'member'
+      },
+      customAppVariables: {},
+      userChatInput: 'hello',
+      timezone: 'Asia/Shanghai',
+      uid: 'user',
+      chatId: 'chat',
+      responseChatItemId: 'response',
+      variableState: await createVariableState(),
+      checkIsStopping: vi.fn(() => false),
+      maxRunTimes: 20,
+      workflowDispatchDeep: 0,
+      lastInteractive: previousInteractive,
+      query: [{ text: { content: '{"ces ":"33"}' } }]
+    } as any);
+
+    expect(mocks.runWorkflow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lastInteractive: previousInteractive,
+        query: [{ text: { content: '{"ces ":"33"}' } }],
+        runtimeEdges: previousInteractive.memoryEdges,
+        runtimeNodes: [
+          expect.objectContaining({
+            nodeId: 'select_1',
+            isEntry: true,
+            outputs: [{ key: 'result', value: 'restored' }]
+          })
+        ]
+      })
+    );
+    expect(mocks.getAppVersionById).toHaveBeenCalledWith(
+      expect.objectContaining({
+        appId: 'child-app',
+        versionId: 'app-fixed-version'
+      })
+    );
+    expect(result.response).toBe('child answer');
+    expect(result.nodeResponse).toMatchObject({
+      moduleType: FlowNodeTypeEnum.appModule,
+      toolRes: 'child answer'
+    });
+    expect(result.assistantMessages).toBeUndefined();
+    expect(result.interactive).toBe(nextInteractive);
+  });
+
+  it('does not allow workflow tool arguments to override internal variables', async () => {
+    mocks.getAppVersionById.mockResolvedValue({
+      resources: [],
+      nodes: [],
+      edges: [],
+      chatConfig: {
+        variables: [
+          {
+            key: 'internal',
+            label: 'Internal',
+            type: VariableInputEnum.internal,
+            valueType: WorkflowIOValueTypeEnum.string,
+            defaultValue: 'internal default'
+          }
+        ]
+      }
+    });
+    mocks.runWorkflow.mockResolvedValue({
+      assistantResponses: [],
+      flowUsages: [],
+      workflowRuntimeSummary: undefined
+    });
+
+    await dispatchApp({
+      app: {
+        id: 'child-app',
+        name: 'Child App'
+      },
+      runningAppInfo: {
+        sourceType: 'app',
+        sourceId: 'parent-app',
+        teamId: 'team',
+        tmbId: 'member',
+        name: 'parent'
+      },
+      runningUserInfo: {
+        teamId: 'team',
+        tmbId: 'member'
+      },
+      customAppVariables: {
+        internal: 'external value'
+      },
+      userChatInput: 'hello',
+      timezone: 'Asia/Shanghai',
+      uid: 'user',
+      chatId: 'chat',
+      responseChatItemId: 'response',
+      variableState: await createVariableState(),
+      checkIsStopping: vi.fn(() => false),
+      maxRunTimes: 20,
+      workflowDispatchDeep: 0
+    } as any);
+
+    expect(mocks.runWorkflow.mock.calls[0][0].variableState.get('internal')).toBe(
+      'internal default'
+    );
+  });
+});

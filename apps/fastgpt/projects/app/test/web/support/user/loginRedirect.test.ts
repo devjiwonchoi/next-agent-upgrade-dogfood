@@ -1,0 +1,448 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { resolveLoginRedirectAfterLogin } from '../../../../src/web/support/user/loginRedirect';
+import {
+  readWorkflowLocalDraft,
+  saveWorkflowLocalDraft
+} from '../../../../src/web/core/workflow/localDraft/storage';
+import { restoreWorkflowLocalDraftAfterLogin } from '../../../../src/web/core/workflow/localDraft/useWorkflowLocalDraftRestore';
+import { setCurrentAuthTmbId } from '../../../../src/web/support/user/currentAuthTmbId';
+import { getAuthLoginRedirectPath } from '../../../../src/web/support/user/loginRedirect/url';
+import {
+  clearInviteLinkFromRoute,
+  getInviteLinkIdFromRoute
+} from '../../../../src/web/support/user/loginRedirect/invitation';
+import type { UserType } from '@fastgpt/global/support/user/type';
+
+vi.mock('@/web/core/app/api/version', () => ({
+  postPublishApp: vi.fn()
+}));
+
+vi.mock('next-i18next', () => ({
+  useTranslation: () => ({
+    t: (key: string) => key
+  })
+}));
+
+vi.mock('@fastgpt/web/hooks/useToast', () => ({
+  useToast: () => ({
+    toast: vi.fn()
+  })
+}));
+
+const storageMap = new Map<string, string>();
+const sessionStorageMap = new Map<string, string>();
+const localStorageMock = {
+  getItem: vi.fn((key: string) => storageMap.get(key) ?? null),
+  setItem: vi.fn((key: string, value: string) => {
+    storageMap.set(key, value);
+  }),
+  removeItem: vi.fn((key: string) => {
+    storageMap.delete(key);
+  })
+};
+const sessionStorageMock = {
+  getItem: vi.fn((key: string) => sessionStorageMap.get(key) ?? null),
+  setItem: vi.fn((key: string, value: string) => {
+    sessionStorageMap.set(key, value);
+  }),
+  removeItem: vi.fn((key: string) => {
+    sessionStorageMap.delete(key);
+  })
+};
+
+const user = {
+  _id: 'user-a',
+  username: 'user-a',
+  team: {
+    teamId: 'team-a',
+    tmbId: 'tmb-a'
+  }
+} as UserType;
+
+const cancellingUser = {
+  ...user,
+  team: {
+    ...user.team,
+    accountCancellation: {
+      status: 'pending' as const
+    }
+  }
+} as UserType;
+
+const saveDraftToStorage = ({
+  tmbId = 'tmb-a'
+}: {
+  tmbId?: string;
+} = {}) =>
+  saveWorkflowLocalDraft({
+    appId: 'app-1',
+    tmbId,
+    data: {
+      nodes: [{ nodeId: 'node-1' }] as any,
+      edges: [] as any,
+      chatConfig: { welcomeText: 'hello' } as any
+    }
+  });
+
+const resolveLoginRoute = ({
+  loginUser = user,
+  fallbackRoute = '/app/detail?appId=app-1&currentTab=appEdit',
+  lastTmbId,
+  saveDraft = vi.fn()
+}: {
+  loginUser?: UserType;
+  fallbackRoute?: string;
+  lastTmbId?: string;
+  saveDraft?: ReturnType<typeof vi.fn>;
+} = {}) =>
+  resolveLoginRedirectAfterLogin({
+    user: loginUser,
+    fallbackRoute,
+    lastTmbId,
+    restoreWorkflowLocalDraft: ({ user }) =>
+      restoreWorkflowLocalDraftAfterLogin({
+        user,
+        saveDraft: saveDraft as any
+      })
+  });
+
+describe('login redirect helpers', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.clearAllMocks();
+    storageMap.clear();
+    sessionStorageMap.clear();
+    setCurrentAuthTmbId();
+    vi.stubGlobal('window', {
+      localStorage: localStorageMock,
+      sessionStorage: sessionStorageMock,
+      location: {
+        pathname: '/login',
+        search: ''
+      }
+    });
+    vi.setSystemTime(new Date('2026-05-11T00:00:00.000Z'));
+  });
+
+  it('redirects a cancelling team to the account cancellation page before invitations and drafts', async () => {
+    const restoreWorkflowLocalDraft = vi.fn();
+
+    const route = await resolveLoginRedirectAfterLogin({
+      user: cancellingUser,
+      fallbackRoute: '/account/team?invitelinkid=invite-1',
+      restoreWorkflowLocalDraft
+    });
+
+    expect(route).toBe('/account/cancel');
+    expect(restoreWorkflowLocalDraft).not.toHaveBeenCalled();
+  });
+
+  it('redirects a user with personal cancellation to the account cancellation page', async () => {
+    const route = await resolveLoginRedirectAfterLogin({
+      user: {
+        ...user,
+        accountCancellation: {
+          status: 'pending'
+        }
+      } as UserType,
+      fallbackRoute: '/dashboard/agent',
+      restoreWorkflowLocalDraft: vi.fn()
+    });
+
+    expect(route).toBe('/account/cancel');
+  });
+
+  it('redirects a finalizing user with personal cancellation', async () => {
+    const route = await resolveLoginRedirectAfterLogin({
+      user: {
+        ...user,
+        accountCancellation: {
+          status: 'finalizing'
+        }
+      } as UserType,
+      fallbackRoute: '/dashboard/agent',
+      restoreWorkflowLocalDraft: vi.fn()
+    });
+
+    expect(route).toBe('/account/cancel');
+  });
+
+  it('redirects a cancelling member without a team cancellation summary', async () => {
+    const route = await resolveLoginRedirectAfterLogin({
+      user: {
+        ...user,
+        accountCancellation: {
+          status: 'pending'
+        },
+        team: {
+          ...user.team
+        }
+      } as UserType,
+      fallbackRoute: '/dashboard/agent',
+      restoreWorkflowLocalDraft: vi.fn()
+    });
+
+    expect(route).toBe('/account/cancel');
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('should auto-save matched draft, clear cache and return canonical app detail route', async () => {
+    saveDraftToStorage();
+    const saveDraft = vi.fn().mockResolvedValue(undefined);
+
+    const route = await resolveLoginRoute({
+      fallbackRoute: '/app/detail?appId=app-1&currentTab=appEdit',
+      saveDraft: saveDraft as any
+    });
+
+    expect(saveDraft).toHaveBeenCalledWith(
+      'app-1',
+      expect.objectContaining({
+        autoSave: true,
+        isPublish: false
+      })
+    );
+    expect(readWorkflowLocalDraft()).toBeNull();
+    expect(route).toBe('/app/detail?appId=app-1');
+  });
+
+  it('should parse both invitation query spellings and clear only invitation context', () => {
+    const route = '/account/team?foo=bar&inviteLinkId=invite-1#members';
+
+    expect(getInviteLinkIdFromRoute(route)).toBe('invite-1');
+    expect(clearInviteLinkFromRoute(route)).toBe('/account/team?foo=bar#members');
+    expect(getInviteLinkIdFromRoute('/account/team?invitelinkid=invite-2')).toBe('invite-2');
+    expect(
+      getInviteLinkIdFromRoute('https://fastgpt.example.com/account/team?inviteLinkId=invite-3')
+    ).toBe('invite-3');
+    expect(
+      clearInviteLinkFromRoute('/account/team?invitelinkid=invite-2&inviteLinkId=invite-3')
+    ).toBe('/account/team');
+  });
+
+  it('should keep invitation route ahead of a matched workflow draft', async () => {
+    saveDraftToStorage();
+    const saveDraft = vi.fn();
+    const invitationRoute = '/account/team?invitelinkid=invite-1';
+
+    const route = await resolveLoginRoute({
+      fallbackRoute: invitationRoute,
+      saveDraft: saveDraft as any
+    });
+
+    expect(route).toBe(invitationRoute);
+    expect(saveDraft).not.toHaveBeenCalled();
+    expect(readWorkflowLocalDraft()).not.toBeNull();
+  });
+
+  it('should keep invitation route ahead of a mismatched-team workflow draft', async () => {
+    saveDraftToStorage({ tmbId: 'tmb-b' });
+    const saveDraft = vi.fn();
+    const invitationRoute = '/account/team?inviteLinkId=invite-2';
+
+    const route = await resolveLoginRoute({
+      fallbackRoute: invitationRoute,
+      saveDraft: saveDraft as any
+    });
+
+    expect(route).toBe(invitationRoute);
+    expect(saveDraft).not.toHaveBeenCalled();
+    expect(readWorkflowLocalDraft()).not.toBeNull();
+  });
+
+  it('should restore draft even when login fallback route is not the workflow detail page', async () => {
+    saveDraftToStorage();
+    const saveDraft = vi.fn().mockResolvedValue(undefined);
+
+    const route = await resolveLoginRoute({
+      fallbackRoute: '/dashboard/agent',
+      saveDraft: saveDraft as any
+    });
+
+    expect(saveDraft).toHaveBeenCalledWith(
+      'app-1',
+      expect.objectContaining({
+        autoSave: true,
+        isPublish: false
+      })
+    );
+    expect(readWorkflowLocalDraft()).toBeNull();
+    expect(route).toBe('/app/detail?appId=app-1');
+  });
+
+  it('should restore without using the encoded login lastRoute as redirect target', async () => {
+    saveDraftToStorage();
+    const saveDraft = vi.fn().mockResolvedValue(undefined);
+
+    const route = await resolveLoginRoute({
+      fallbackRoute: '%2Fapp%2Fdetail%3FappId%3Dapp-1%26currentTab%3DappEdit',
+      saveDraft: saveDraft as any
+    });
+
+    expect(saveDraft).toHaveBeenCalledWith(
+      'app-1',
+      expect.objectContaining({
+        autoSave: true,
+        isPublish: false
+      })
+    );
+    expect(readWorkflowLocalDraft()).toBeNull();
+    expect(route).toBe('/app/detail?appId=app-1');
+  });
+
+  it('should retry 3 times and continue redirect when auto-save keeps failing', async () => {
+    saveDraftToStorage();
+    const restoreError = new Error('network error');
+    const saveDraft = vi.fn().mockRejectedValue(restoreError);
+
+    const route = await resolveLoginRoute({
+      fallbackRoute: '/app/detail?appId=app-1',
+      saveDraft: saveDraft as any
+    });
+
+    expect(saveDraft).toHaveBeenCalledTimes(3);
+    expect(readWorkflowLocalDraft()).toBeNull();
+    expect(route).toBe('/app/detail?appId=app-1');
+  });
+
+  it('should stop retrying when auto-save succeeds after transient failures', async () => {
+    saveDraftToStorage();
+    const saveDraft = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('network error 1'))
+      .mockRejectedValueOnce(new Error('network error 2'))
+      .mockResolvedValueOnce(undefined);
+
+    const route = await resolveLoginRoute({
+      fallbackRoute: '/app/detail?appId=app-1',
+      saveDraft: saveDraft as any
+    });
+
+    expect(saveDraft).toHaveBeenCalledTimes(3);
+    expect(readWorkflowLocalDraft()).toBeNull();
+    expect(route).toBe('/app/detail?appId=app-1');
+  });
+
+  it('should restore draft when draft tmbId matches even if query lastTmbId differs', async () => {
+    saveDraftToStorage();
+    const saveDraft = vi.fn().mockResolvedValue(undefined);
+
+    const route = await resolveLoginRoute({
+      lastTmbId: 'tmb-b',
+      fallbackRoute: '/app/detail?appId=app-1&currentTab=appEdit',
+      saveDraft: saveDraft as any
+    });
+
+    expect(saveDraft).toHaveBeenCalledWith(
+      'app-1',
+      expect.objectContaining({
+        autoSave: true,
+        isPublish: false
+      })
+    );
+    expect(readWorkflowLocalDraft()).toBeNull();
+    expect(route).toBe('/app/detail?appId=app-1');
+  });
+
+  it('should discard draft and skip fallback route when login tmbId differs from draft tmbId', async () => {
+    saveDraftToStorage();
+    const saveDraft = vi.fn();
+
+    const route = await resolveLoginRoute({
+      loginUser: {
+        ...user,
+        team: {
+          ...user.team,
+          teamId: 'team-b',
+          tmbId: 'tmb-b'
+        }
+      },
+      fallbackRoute: '/app/detail?appId=app-1&currentTab=appEdit',
+      saveDraft: saveDraft as any
+    });
+
+    expect(saveDraft).not.toHaveBeenCalled();
+    expect(readWorkflowLocalDraft()).toBeNull();
+    expect(route).toBe('/dashboard/agent');
+  });
+
+  it('should discard draft and skip fallback route when draft and query lastTmbId both mismatch', async () => {
+    saveDraftToStorage();
+    const saveDraft = vi.fn();
+
+    const route = await resolveLoginRoute({
+      loginUser: {
+        ...user,
+        team: {
+          ...user.team,
+          teamId: 'team-b',
+          tmbId: 'tmb-b'
+        }
+      },
+      lastTmbId: 'tmb-a',
+      fallbackRoute: '/app/detail?appId=app-1&currentTab=appEdit',
+      saveDraft: saveDraft as any
+    });
+
+    expect(saveDraft).not.toHaveBeenCalled();
+    expect(readWorkflowLocalDraft()).toBeNull();
+    expect(route).toBe('/dashboard/agent');
+  });
+
+  it('should use fallback route without draft when login tmbId matches query lastTmbId', async () => {
+    const saveDraft = vi.fn();
+
+    const route = await resolveLoginRoute({
+      lastTmbId: 'tmb-a',
+      fallbackRoute: '/app/detail?appId=app-1&currentTab=appEdit',
+      saveDraft: saveDraft as any
+    });
+
+    expect(saveDraft).not.toHaveBeenCalled();
+    expect(route).toBe('/app/detail?appId=app-1&currentTab=appEdit');
+  });
+
+  it('should use fallback route without draft when query lastTmbId is missing', async () => {
+    const saveDraft = vi.fn();
+
+    const route = await resolveLoginRoute({
+      fallbackRoute: '/app/detail?appId=app-1&currentTab=appEdit',
+      saveDraft: saveDraft as any
+    });
+
+    expect(saveDraft).not.toHaveBeenCalled();
+    expect(route).toBe('/app/detail?appId=app-1&currentTab=appEdit');
+  });
+
+  it('should skip fallback route without draft when login tmbId differs from query lastTmbId', async () => {
+    const saveDraft = vi.fn();
+
+    const route = await resolveLoginRoute({
+      loginUser: {
+        ...user,
+        team: {
+          ...user.team,
+          teamId: 'team-b',
+          tmbId: 'tmb-b'
+        }
+      },
+      lastTmbId: 'tmb-a',
+      fallbackRoute: '/app/detail?appId=app-1&currentTab=appEdit',
+      saveDraft: saveDraft as any
+    });
+
+    expect(saveDraft).not.toHaveBeenCalled();
+    expect(route).toBe('/dashboard/agent');
+  });
+
+  it('should build auth login redirect path with current tab tmbId', () => {
+    setCurrentAuthTmbId('tmb-a');
+
+    expect(getAuthLoginRedirectPath({ lastRoute: '/app/detail?appId=app-1' })).toBe(
+      '/login?lastRoute=%2Fapp%2Fdetail%3FappId%3Dapp-1&lastTmbId=tmb-a'
+    );
+  });
+});

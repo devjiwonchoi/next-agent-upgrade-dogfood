@@ -1,0 +1,87 @@
+---
+title: Layout
+description: Structural blocks for page scaffolding.
+---
+
+import CopyCommandButton from "@/components/copy-command-button";
+import ComponentPreview from "@/components/component-preview";
+import Footer1 from "@/components/ui/8bit/blocks/footer1";
+import NotFound1 from "@/components/ui/8bit/blocks/not-found1";
+import NotFound2 from "@/components/ui/8bit/blocks/not-found2";
+import NotFound3 from "@/components/ui/8bit/blocks/not-found3";
+import NotFoundBrickBreaker from "@/components/ui/8bit/blocks/not-found-brick-breaker";
+import NotFoundCratePusher from "@/components/ui/8bit/blocks/not-found-crate-pusher";
+
+<div className="flex flex-col md:flex-row items-center justify-end gap-2 mb-2">
+  <CopyCommandButton
+    copyCommand="pnpm dlx shadcn@latest add @8bitcn/footer1"
+    command="pnpm dlx shadcn@latest add @8bitcn/footer1"
+  />
+</div>
+
+<ComponentPreview title="Footer" name="footer1">
+  <Footer1 />
+</ComponentPreview>
+
+<div className="mt-10 flex flex-col md:flex-row items-center justify-end gap-2 mb-2">
+  <CopyCommandButton
+    copyCommand="pnpm dlx shadcn@latest add @8bitcn/not-found1"
+    command="pnpm dlx shadcn@latest add @8bitcn/not-found1"
+  />
+</div>
+
+<ComponentPreview title="404 Page" name="not-found1">
+  <NotFound1 />
+</ComponentPreview>
+
+<div className="mt-10 flex flex-col md:flex-row items-center justify-end gap-2 mb-2">
+  <CopyCommandButton
+    copyCommand="pnpm dlx shadcn@latest add @8bitcn/not-found2"
+    command="pnpm dlx shadcn@latest add @8bitcn/not-found2"
+  />
+</div>
+
+<ComponentPreview title="404 Dwarf" name="not-found2">
+  <NotFound2 />
+</ComponentPreview>
+
+<div className="mt-10 flex flex-col md:flex-row items-center justify-end gap-2 mb-2">
+  <CopyCommandButton
+    copyCommand="pnpm dlx shadcn@latest add @8bitcn/not-found3"
+    command="pnpm dlx shadcn@latest add @8bitcn/not-found3"
+  />
+</div>
+
+<ComponentPreview title="404 Undead" name="not-found3">
+  <NotFound3 />
+</ComponentPreview>
+
+<div className="mt-10 mb-2 flex flex-col items-center justify-end gap-2 md:flex-row">
+  <CopyCommandButton
+    copyCommand="pnpm dlx shadcn@latest add @8bitcn/not-found-crate-pusher"
+    command="pnpm dlx shadcn@latest add @8bitcn/not-found-crate-pusher"
+  />
+</div>
+
+<ComponentPreview
+  fullPageHref="/blocks/not-found-crate-pusher"
+  title="404 Crate Pusher: 20 Random Puzzles"
+  name="not-found-crate-pusher"
+>
+  <NotFoundCratePusher className="min-h-[640px]" />
+</ComponentPreview>
+
+<div className="mt-10 mb-2 flex flex-col items-center justify-end gap-2 md:flex-row">
+  <CopyCommandButton
+    copyCommand="pnpm dlx shadcn@latest add @8bitcn/not-found-brick-breaker"
+    command="pnpm dlx shadcn@latest add @8bitcn/not-found-brick-breaker"
+  />
+</div>
+
+<ComponentPreview
+  fullPageHref="/blocks/not-found-brick-breaker"
+  title="404 Brick Breaker"
+  name="not-found-brick-breaker"
+>
+  <NotFoundBrickBreaker className="min-h-[640px]" />
+</ComponentPreview>

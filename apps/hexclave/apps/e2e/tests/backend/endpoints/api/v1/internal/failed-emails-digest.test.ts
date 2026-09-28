@@ -1,0 +1,483 @@
+import { getEnvVariable } from "@hexclave/shared/dist/utils/env";
+import { wait } from "@hexclave/shared/dist/utils/promises";
+import { stringCompare } from "@hexclave/shared/dist/utils/strings";
+import { describe, expect } from "vitest";
+import { it } from "../../../../../helpers";
+import { Auth, backendContext, bumpEmailAddress, InternalProjectKeys, niceBackendFetch, Project } from "../../../../backend-helpers";
+
+type FailedEmailsBatch = {
+  emails: Array<{ subject: string, to: string[] }>,
+  tenant_owner_emails: string[],
+  project_id: string,
+  tenancy_id: string,
+};
+
+type DigestResponse = Awaited<ReturnType<typeof niceBackendFetch>>;
+
+const isSourceOfTruthTest = () => getEnvVariable("STACK_TEST_SOURCE_OF_TRUTH", "") === "true";
+
+// Always uses dry_run=true: the only callers are the polling helper below
+// (which must be side-effect-free since it fires repeatedly) and the snapshot
+// assertion (which uses the same SELECT result regardless of dry_run).
+async function fetchFailedEmailsDigest(): Promise<DigestResponse> {
+  return await niceBackendFetch("/api/v1/internal/failed-emails-digest", {
+    method: "POST",
+    headers: { "Authorization": "Bearer mock_cron_secret" },
+    query: { dry_run: "true" },
+  });
+}
+
+function selectBatchesForCurrentMailbox(response: DigestResponse): FailedEmailsBatch[] {
+  const batches: FailedEmailsBatch[] = response.body.failed_emails_by_tenancy ?? [];
+  const ownerEmail = backendContext.value.mailbox.emailAddress;
+  return batches
+    .filter((batch) => batch.tenant_owner_emails.includes(ownerEmail))
+    .map((batch) => ({
+      ...batch,
+      emails: [...batch.emails].sort((a, b) => stringCompare(a.subject, b.subject)),
+    }));
+}
+
+// Polls the failed-emails-digest until the current mailbox's batch contains
+// at least `expectedFailedEmailCount` emails. Throws on timeout with a clear
+// message — silently returning partial state would make the subsequent
+// snapshot fail with an unhelpful "got 1, expected 2" diff that hides the
+// fact that the test actually timed out.
+async function waitForFailedEmailsDigest(
+  expectedFailedEmailCount: number,
+  options: { timeoutMs?: number, intervalMs?: number } = {},
+): Promise<{ response: DigestResponse, batches: FailedEmailsBatch[] }> {
+  const timeoutMs = options.timeoutMs ?? 30_000;
+  const intervalMs = options.intervalMs ?? 500;
+
+  let response = await fetchFailedEmailsDigest();
+  let batches = selectBatchesForCurrentMailbox(response);
+  const startedAt = performance.now();
+  while ((batches[0]?.emails.length ?? 0) < expectedFailedEmailCount) {
+    if (performance.now() - startedAt >= timeoutMs) {
+      const observed = batches[0]?.emails.length ?? 0;
+      throw new Error(
+        `Timed out after ${timeoutMs}ms waiting for ${expectedFailedEmailCount} ` +
+        `failed email(s) for the current mailbox in the digest response. ` +
+        `Last observed: ${observed} email(s). ` +
+        `Last batches: ${JSON.stringify(batches, null, 2)}`,
+      );
+    }
+    await wait(intervalMs);
+    response = await fetchFailedEmailsDigest();
+    batches = selectBatchesForCurrentMailbox(response);
+  }
+  return { response, batches };
+}
+
+describe("unauthorized requests", () => {
+  it("should return 401 when invalid authorization is provided", async ({ expect }) => {
+    const response = await niceBackendFetch(
+      "/api/v1/internal/failed-emails-digest",
+      {
+        method: "POST",
+        accessType: "server",
+        headers: {
+          "Authorization": "Bearer some_invalid_secret",
+        }
+      }
+    );
+    expect(response).toMatchInlineSnapshot(`
+      NiceResponse {
+        "status": 401,
+        "body": "Unauthorized",
+        "headers": Headers { <some fields may have been hidden> },
+      }
+    `);
+  });
+
+  it("should return 400 when no authorization header is provided", async ({ expect }) => {
+    const response = await niceBackendFetch(
+      "/api/v1/internal/failed-emails-digest",
+      {
+        method: "POST",
+        accessType: "server",
+      }
+    );
+    expect(response.status).toBe(400);
+  });
+
+  it("should return 401 when authorization header is malformed", async ({ expect }) => {
+    const response = await niceBackendFetch(
+      "/api/v1/internal/failed-emails-digest",
+      {
+        method: "POST",
+        accessType: "server",
+        headers: {
+          "Authorization": "InvalidFormat",
+        }
+      }
+    );
+    expect(response).toMatchInlineSnapshot(`
+      NiceResponse {
+        "status": 401,
+        "body": "Unauthorized",
+        "headers": Headers { <some fields may have been hidden> },
+      }
+    `);
+  });
+});
+
+describe("with valid credentials", () => {
+  async function testFailedEmails() {
+    backendContext.set({
+      projectKeys: InternalProjectKeys,
+      userAuth: null,
+    });
+    await Auth.fastSignUpWithEmail();
+    const projectOwnerMailbox = backendContext.value.mailbox;
+    const { projectId } = await Project.createAndSwitch({
+      display_name: "Test Failed Emails Project",
+      config: {
+        credential_enabled: true,
+        email_config: {
+          host: "this-is-not-a-valid-host.0.0.0.0",
+          port: 123,
+          username: "123",
+          password: "123",
+          sender_email: "123@g.co",
+          sender_name: "123",
+          type: "standard",
+        },
+      },
+    }, true);
+    // The project intentionally has a broken SMTP host, so preserve the
+    // verification outbox row without waiting for delivery.
+    const { userId } = await Auth.Password.signUpWithEmail({ sendVerificationEmail: true, waitForVerificationEmail: false });
+    await Auth.signOut();
+
+    const testEmailResponse = await niceBackendFetch("/api/v1/emails/send-email", {
+      method: "POST",
+      accessType: "server",
+      body: {
+        "user_ids": [
+          userId,
+        ],
+        "html": "This is a test email from Hexclave.",
+      },
+    });
+    expect(testEmailResponse).toMatchInlineSnapshot(`
+      NiceResponse {
+        "status": 200,
+        "body": { "results": [{ "user_id": "<stripped UUID>" }] },
+        "headers": Headers { <some fields may have been hidden> },
+      }
+    `);
+
+    const { response, batches: mockProjectFailedEmails } = await waitForFailedEmailsDigest(2);
+      expect(response.status).toBe(200);
+
+      if (isSourceOfTruthTest()) {
+      expect(mockProjectFailedEmails).toMatchInlineSnapshot(`[]`);
+      } else {
+      expect(mockProjectFailedEmails).toMatchInlineSnapshot(`
+        [
+          {
+            "emails": [
+              {
+                "subject": "",
+                "to": ["User ID: <stripped UUID>"],
+              },
+              {
+                "subject": "Verify your email at Test Failed Emails Project",
+                "to": ["default-mailbox--<stripped UUID>@stack-generated.example.com"],
+              },
+            ],
+            "project_id": "<stripped UUID>",
+            "tenancy_id": "<stripped UUID>",
+            "tenant_owner_emails": [
+              "default-mailbox--<stripped UUID>@stack-generated.example.com",
+              "default-mailbox--<stripped UUID>@stack-generated.example.com",
+            ],
+          },
+        ]
+      `);
+      expect(mockProjectFailedEmails[0].project_id).toBe(projectId);
+      }
+
+      return {
+        projectOwnerMailbox,
+      };
+  }
+
+  it("should return 200 and process dry run request", async ({ expect }) => {
+    const { projectOwnerMailbox } = await testFailedEmails();
+
+    const messages = await projectOwnerMailbox.fetchMessages();
+    expect(messages.filter(msg => !msg.subject.includes("Sign in"))).toMatchInlineSnapshot(`[]`);
+  }, { repeats: 3 });
+
+  // TODO: failed emails digest is currently disabled. When re-enabling, this
+  // test will need to call the digest endpoint with dry_run=false separately
+  // (testFailedEmails / waitForFailedEmailsDigest are dry-run only).
+  it.todo("should return 200 and process failed emails digest", async ({ expect }) => {
+    const { projectOwnerMailbox } = await testFailedEmails();
+    const messages = await projectOwnerMailbox.fetchMessages();
+    const digestEmail = messages.find(msg => msg.subject === "Failed emails digest");
+    expect(digestEmail).toBeDefined();
+    expect(digestEmail!.from).toBe("Hexclave <noreply@example.com>");
+
+  });
+
+  it("should return 200 and not send digest email when all emails are successful and dry run is enabled", async ({ expect }) => {
+    await Auth.fastSignUpWithEmail();
+    await Project.createAndSwitch({
+      display_name: "Test Successful Emails Project",
+      config: {
+        magic_link_enabled: true,
+      },
+    }, true);
+    await Auth.fastSignUpWithEmail();
+
+    const response = await niceBackendFetch("/api/v1/internal/failed-emails-digest", {
+      method: "POST",
+      headers: { "Authorization": "Bearer mock_cron_secret" },
+      query: {
+        dry_run: "true",
+      },
+    });
+    expect(response.status).toBe(200);
+
+    const failedEmailsByTenancy = response.body.failed_emails_by_tenancy;
+    const mockProjectFailedEmails = failedEmailsByTenancy.filter(
+      (batch: any) => batch.tenant_owner_emails.includes(backendContext.value.mailbox.emailAddress)
+    );
+    expect(mockProjectFailedEmails).toMatchInlineSnapshot(`[]`);
+
+    const messages = await backendContext.value.mailbox.fetchMessages();
+    const digestEmail = messages.find(msg => msg.subject === "Failed emails digest");
+    expect(digestEmail).toBeUndefined();
+  });
+
+  // TODO: fix this when we re-enable failed emails digest
+  it.todo("should return 200 and not send digest email when all emails are successful", async ({ expect }) => {
+    await Auth.fastSignUpWithEmail();
+    await Project.createAndSwitch({
+      display_name: "Test Successful Emails Project",
+      config: {
+        magic_link_enabled: true,
+      },
+    }, true);
+    await Auth.fastSignUpWithEmail();
+
+    const response = await niceBackendFetch("/api/v1/internal/failed-emails-digest", {
+      method: "POST",
+      headers: { "Authorization": "Bearer mock_cron_secret" }
+    });
+    expect(response.status).toBe(200);
+
+    const failedEmailsByTenancy = response.body.failed_emails_by_tenancy;
+    const mockProjectFailedEmails = failedEmailsByTenancy.filter(
+      (batch: any) => batch.tenant_owner_emails.includes(backendContext.value.mailbox.emailAddress)
+    );
+    expect(mockProjectFailedEmails).toMatchInlineSnapshot(`[]`);
+
+    const messages = await backendContext.value.mailbox.fetchMessages();
+    const digestEmail = messages.find(msg => msg.subject === "Failed emails digest");
+    expect(digestEmail).toBeUndefined();
+  });
+
+  // TODO: fix this when we re-enable failed emails digest
+  it.todo("should not send digest email when project owner has no primary email", async ({ expect }) => {
+    backendContext.set({
+      projectKeys: InternalProjectKeys,
+      userAuth: null,
+    });
+    const { userId } = await Auth.fastSignUpWithEmail();
+
+    // Remove primary email from the user
+    const updateEmailResponse = await niceBackendFetch(`/api/v1/users/${userId}`, {
+      method: "PATCH",
+      accessType: "admin",
+      body: {
+        "primary_email": null,
+      },
+    });
+    expect(updateEmailResponse.status).toBe(200);
+
+    await Project.createAndSwitch({
+      display_name: "Test Project No Owner Email",
+    });
+
+    // Send a test email that will fail
+    await niceBackendFetch("/api/v1/send-email", {
+      method: "POST",
+      accessType: "server",
+      body: {
+        "user_ids": [],
+        "html": "This is a test email from Hexclave.",
+      },
+    });
+
+    const response = await niceBackendFetch("/api/v1/internal/failed-emails-digest", {
+      method: "POST",
+      headers: { "Authorization": "Bearer mock_cron_secret" }
+    });
+    expect(response.status).toBe(200);
+
+    const messages = await backendContext.value.mailbox.fetchMessages();
+    const digestEmail = messages.find(msg => msg.subject === "Failed emails digest");
+    expect(digestEmail).toBeUndefined();
+  });
+
+  // TODO: fix this when we re-enable failed emails digest
+  it.todo("should not send digest email when project has no owner (account deleted)", async ({ expect }) => {
+    const { userId } = await Auth.fastSignUpWithEmail();
+    await Project.createAndSwitch({
+      display_name: "Test Project Deleted Owner",
+    }, true);
+
+    // Send a test email that will fail
+    await niceBackendFetch("/api/v1/send-email", {
+      method: "POST",
+      accessType: "server",
+      body: {
+        "user_ids": [],
+        "html": "This is a test email from Hexclave.",
+      },
+    });
+
+    // Delete the user account (project owner)
+    backendContext.set({
+      projectKeys: InternalProjectKeys,
+    });
+    const deleteUserResponse = await niceBackendFetch(`/api/v1/users/${userId}`, {
+      method: "DELETE",
+      accessType: "admin",
+    });
+    expect(deleteUserResponse.body).toMatchInlineSnapshot(`{ "success": true }`);
+
+    const response = await niceBackendFetch("/api/v1/internal/failed-emails-digest", {
+      method: "POST",
+      headers: { "Authorization": "Bearer mock_cron_secret" }
+    });
+    expect(response.status).toBe(200);
+
+    // Should not send digest email when project owner is deleted
+    const messages = await backendContext.value.mailbox.fetchMessages();
+    const digestEmail = messages.find(msg => msg.subject === "Failed emails digest");
+    expect(digestEmail).toBeUndefined();
+  });
+
+  // TODO: fix this when we re-enable failed emails digest
+  it.todo("should not send digest email when project is deleted after email delivery failed", async ({ expect }) => {
+    await Auth.fastSignUpWithEmail();
+    await Project.createAndSwitch({
+      display_name: "Test Project To Be Deleted",
+    }, true);
+
+    // Send a test email that will fail
+    await niceBackendFetch("/api/v1/send-email", {
+      method: "POST",
+      accessType: "server",
+      body: {
+        "user_ids": [],
+        "html": "This is a test email from Hexclave.",
+      },
+    });
+
+    // Delete the project
+    const deleteProjectResponse = await niceBackendFetch(`/api/v1/internal/projects/current`, {
+      method: "DELETE",
+      accessType: "admin",
+    });
+    expect(deleteProjectResponse.body).toMatchInlineSnapshot(`{ "success": true }`);
+
+    const response = await niceBackendFetch("/api/v1/internal/failed-emails-digest", {
+      method: "POST",
+      headers: { "Authorization": "Bearer mock_cron_secret" }
+    });
+    expect(response.status).toBe(200);
+
+    // Should not send digest email when project is deleted
+    const messages = await backendContext.value.mailbox.fetchMessages();
+    const digestEmail = messages.find(msg => msg.subject === "Failed emails digest");
+    expect(digestEmail).toBeUndefined();
+  });
+
+  // TODO: fix this when we re-enable failed emails digest
+  it.todo("should send digest email to each owner when project has multiple owners", async ({ expect }) => {
+    const firstOwnerMailbox = backendContext.value.mailbox;
+    backendContext.set({
+      projectKeys: InternalProjectKeys,
+    });
+    const { userId: user1Id } = await Auth.fastSignUpWithEmail(firstOwnerMailbox.emailAddress);
+    const { projectId } = await Project.createAndSwitch({
+      display_name: "Test Project Multiple Owners",
+    }, true);
+    const oldProjectKeys = backendContext.value.projectKeys;
+    const oldAuth = backendContext.value.userAuth;
+    const secondOwnerMailbox = await bumpEmailAddress();
+    backendContext.set({
+      projectKeys: InternalProjectKeys,
+    });
+    const { userId: user2Id } = await Auth.fastSignUpWithEmail(secondOwnerMailbox.emailAddress);
+
+    const user1Response = await niceBackendFetch(`/api/v1/users/${user1Id}`, {
+      method: "GET",
+      accessType: "admin",
+    });
+    expect(user1Response.status).toBe(200);
+    const addUserToTeamResponse = await niceBackendFetch(`/api/v1/team-memberships/${user1Response.body.selected_team_id}/${user2Id}`, {
+      method: "POST",
+      accessType: "admin",
+      body: {},
+    });
+    expect(addUserToTeamResponse).toMatchInlineSnapshot(`
+      NiceResponse {
+        "status": 201,
+        "body": {
+          "team_id": "<stripped UUID>",
+          "user_id": "<stripped UUID>",
+        },
+        "headers": Headers { <some fields may have been hidden> },
+      }
+    `);
+    backendContext.set({ projectKeys: oldProjectKeys, userAuth: oldAuth });
+
+    // Send a test email that will fail
+    const sendTestEmailResponse = await niceBackendFetch("/api/v1/send-email", {
+      method: "POST",
+      accessType: "server",
+      body: {
+        "user_ids": [],
+        "html": "This is a test email from Hexclave.",
+      },
+    });
+    expect(sendTestEmailResponse.body).toMatchInlineSnapshot(`
+      {
+        "results": [],
+      }
+    `);
+
+    const response = await niceBackendFetch("/api/v1/internal/failed-emails-digest", {
+      method: "POST",
+      headers: { "Authorization": "Bearer mock_cron_secret" }
+    });
+    expect(response.status).toBe(200);
+    const currentResponses = response.body.failed_emails_by_tenancy.filter(
+      (batch: any) => batch.project_id === projectId
+    );
+
+    if (isSourceOfTruthTest()) {
+      expect(currentResponses).toMatchInlineSnapshot(`[]`);
+    } else {
+      expect(currentResponses.length).toBe(1);
+      expect(currentResponses[0].tenant_owner_emails.length).toBe(2);
+      expect(currentResponses[0].tenant_owner_emails.includes(firstOwnerMailbox.emailAddress)).toBe(true);
+      expect(currentResponses[0].tenant_owner_emails.includes(secondOwnerMailbox.emailAddress)).toBe(true);
+
+      const firstMailboxMessages = await firstOwnerMailbox.fetchMessages();
+      const secondMailboxMessages = await secondOwnerMailbox.fetchMessages();
+      const firstMailboxDigestEmail = firstMailboxMessages.find(msg => msg.subject === "Failed emails digest");
+      const secondMailboxDigestEmail = secondMailboxMessages.find(msg => msg.subject === "Failed emails digest");
+      expect(firstMailboxDigestEmail).toBeDefined();
+      expect(secondMailboxDigestEmail).toBeDefined();
+    }
+  });
+});

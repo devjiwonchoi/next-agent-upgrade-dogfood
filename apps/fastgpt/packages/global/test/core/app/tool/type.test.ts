@@ -1,0 +1,87 @@
+import { describe, expect, it } from 'vitest';
+import { AgentToolSchema } from '@fastgpt/global/core/app/tool/type';
+import { AgentToolInputModeEnum } from '@fastgpt/global/core/app/tool/constants';
+
+describe('AgentToolSchema', () => {
+  it('keeps the dedicated key and mode input snapshot', () => {
+    const result = AgentToolSchema.parse({
+      id: 'systemTool-search',
+      inputs: [{ key: 'query', mode: AgentToolInputModeEnum.agentGenerated }],
+      config: {}
+    });
+
+    expect(result.inputs).toEqual([{ key: 'query', mode: AgentToolInputModeEnum.agentGenerated }]);
+  });
+
+  it('rejects a non-sparse workflow input snapshot', () => {
+    expect(() =>
+      AgentToolSchema.parse({
+        id: 'systemTool-search',
+        inputs: [
+          {
+            key: 'query',
+            renderTypeList: ['input', 'agentGenerated'],
+            selectedType: 'agentGenerated'
+          }
+        ],
+        config: {}
+      })
+    ).toThrow();
+  });
+
+  it('requires an explicit mode for every current input', () => {
+    expect(() =>
+      AgentToolSchema.parse({
+        id: 'workflow-tool',
+        inputs: [
+          {
+            key: 'query',
+            mode: undefined
+          }
+        ],
+        config: { query: 'fixed query' }
+      })
+    ).toThrow();
+  });
+
+  it('preserves missing inputs as the legacy Agent marker', () => {
+    const result = AgentToolSchema.parse({
+      id: 'systemTool-search',
+      config: {}
+    });
+
+    expect(result.inputs).toBeUndefined();
+  });
+
+  it('preserves an empty version as keep-latest', () => {
+    const result = AgentToolSchema.parse({
+      id: 'systemTool-search',
+      version: '',
+      config: {}
+    });
+
+    expect(result.version).toBe('');
+  });
+
+  it('rejects historical input snapshots on a regular tool', () => {
+    expect(() =>
+      AgentToolSchema.parse({
+        id: 'tool-1',
+        config: {},
+        inputs: [{ key: 'query', selectedTypeIndex: 1 }]
+      })
+    ).toThrow();
+  });
+
+  it('preserves name and avatar in AgentTool snapshot', () => {
+    const result = AgentToolSchema.parse({
+      id: 'tool-1',
+      name: 'Search Tool',
+      avatar: 'core/workflow/template/tool',
+      config: {}
+    });
+
+    expect(result.name).toBe('Search Tool');
+    expect(result.avatar).toBe('core/workflow/template/tool');
+  });
+});

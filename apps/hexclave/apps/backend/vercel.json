@@ -1,0 +1,29 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "elysia",
+  "crons": [
+    {
+      "path": "/api/latest/internal/email-queue-step",
+      "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/latest/internal/external-db-sync/poller",
+      "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/latest/internal/external-db-sync/sequencer",
+      "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/latest/internal/workflow-engine-step",
+      "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/latest/internal/deployments-parking-sweep",
+      "schedule": "*/10 * * * *"
+    }
+  ],
+  "github": {
+    "autoJobCancelation": false
+  }
+}

@@ -1,0 +1,108 @@
+import { Box, Flex } from '@chakra-ui/react';
+import { useSystem } from '@fastgpt/web/hooks/useSystem';
+import React, { useEffect, useMemo, useState } from 'react';
+import styles from '../FormComponent/styles.module.scss';
+import { cardStyles } from '../../constants';
+import AppCard from './AppCard';
+import ChatTest from './ChatTest';
+import MyBox from '@fastgpt/web/components/common/MyBox';
+import EditForm from './EditForm';
+import { type HttpToolConfigType } from '@fastgpt/global/core/app/tool/httpTool/type';
+import { useContextSelector } from 'use-context-selector';
+import { AppContext } from '../../context';
+import { FlowNodeTypeEnum } from '@fastgpt/global/core/workflow/node/constant';
+
+const Edit = () => {
+  const { isPc } = useSystem();
+  const appDetail = useContextSelector(AppContext, (v) => v.appDetail);
+  const toolSetData = useMemo(() => {
+    const toolSetNode = appDetail.nodes.find(
+      (item) => item.flowNodeType === FlowNodeTypeEnum.toolSet
+    );
+    return toolSetNode?.toolConfig?.httpToolSet;
+  }, [appDetail.nodes]);
+
+  const editableToolSetData = toolSetData && 'toolId' in toolSetData ? undefined : toolSetData;
+
+  const [currentTool, setCurrentTool] = useState<HttpToolConfigType | undefined>(
+    editableToolSetData?.toolList?.[0]
+  );
+  const baseUrl = editableToolSetData?.baseUrl ?? '';
+  const toolList = editableToolSetData?.toolList ?? [];
+  const apiSchemaStr = editableToolSetData?.apiSchemaStr;
+  const headerSecret = editableToolSetData?.headerSecret ?? {};
+  const customHeaders = editableToolSetData?.customHeaders;
+  const parsedCustomHeaders = useMemo(() => {
+    try {
+      return JSON.parse(customHeaders || '{}') || {};
+    } catch {
+      return {};
+    }
+  }, [customHeaders]);
+
+  useEffect(() => {
+    if (!currentTool || toolList.length === 0) {
+      // 组件加载或工具集更新后，将当前选择同步到可用工具列表。
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setCurrentTool(toolList[0]);
+      return;
+    }
+
+    const updatedTool = toolList.find((tool) => tool.name === currentTool.name);
+    if (updatedTool) {
+      setCurrentTool(updatedTool);
+    } else {
+      setCurrentTool(toolList[0]);
+    }
+  }, [toolSetData]);
+
+  return (
+    <MyBox
+      display={['block', 'flex']}
+      flex={'1 0 0'}
+      h={0}
+      mt={[4, 0]}
+      gap={1}
+      borderRadius={'lg'}
+      overflowY={['auto', 'unset']}
+    >
+      <Flex
+        flexDirection={'column'}
+        className={styles.EditAppBox}
+        pr={[0, 1]}
+        minW={['auto', '580px']}
+        mb={3}
+        flex={'1 0 0'}
+      >
+        <Box {...cardStyles} boxShadow={'2'}>
+          <AppCard />
+        </Box>
+
+        <Box mt={4} {...cardStyles} flex={'1 0 0'} overflow={'auto'} boxShadow={'2'}>
+          <EditForm
+            currentTool={currentTool}
+            setCurrentTool={setCurrentTool}
+            toolList={toolList}
+            baseUrl={baseUrl}
+            apiSchemaStr={apiSchemaStr}
+            headerSecret={headerSecret}
+            customHeaders={customHeaders}
+          />
+        </Box>
+      </Flex>
+      {isPc && (
+        <Box flex={'2 0 0'} w={0} mb={3}>
+          <ChatTest
+            apiSchemaStr={apiSchemaStr}
+            currentTool={currentTool}
+            baseUrl={baseUrl}
+            headerSecret={headerSecret}
+            customHeaders={parsedCustomHeaders}
+          />
+        </Box>
+      )}
+    </MyBox>
+  );
+};
+
+export default React.memo(Edit);

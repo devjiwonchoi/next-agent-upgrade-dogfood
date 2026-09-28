@@ -1,0 +1,2696 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model SchemaMigration {
+  id            String   @id @default(dbgenerated("gen_random_uuid()"))
+  finishedAt    DateTime
+  migrationName String   @unique
+
+  @@ignore
+}
+
+model Project {
+  // Note that the project with ID `internal` is handled as a special case. All other project IDs are UUIDs.
+  id String @id
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  displayName      String
+  description      String  @default("")
+  isProductionMode Boolean
+  isDevelopmentEnvironment Boolean @default(false)
+  ownerTeamId      String? @db.Uuid
+  onboardingStatus String  @default("completed")
+  onboardingState  Json?
+
+  isAvailableAsPreviewProject Boolean @default(false)
+
+  logoUrl             String?
+  logoFullUrl         String?
+  logoDarkModeUrl     String?
+  logoFullDarkModeUrl String?
+
+  projectConfigOverride Json?
+  stripeAccountId       String?
+
+  apiKeySets                 ApiKeySet[]
+  projectUsers               ProjectUser[]
+  provisionedProject         ProvisionedProject?
+  tenancies                  Tenancy[]
+  branchConfigOverrides      BranchConfigOverride[]
+  environmentConfigOverrides EnvironmentConfigOverride[]
+  configAgentRuns            ConfigAgentRun[]
+  aiConversations            AiConversation[]
+  
+  projectSecrets             ProjectSecret[]
+
+  @@index([ownerTeamId], map: "Project_ownerTeamId_idx")
+}
+
+model Tenancy {
+  id String @id @default(uuid()) @db.Uuid
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  branchId String
+
+  // If organizationId is NULL, hasNoOrganization must be TRUE. If organizationId is not NULL, hasNoOrganization must be NULL.
+  organizationId      String?              @db.Uuid
+  hasNoOrganization   BooleanTrue?
+  emailOutboxes       EmailOutbox[]
+  sessionReplays      SessionReplay[]
+  sessionReplayChunks SessionReplayChunk[]
+  managedEmailDomains ManagedEmailDomain[]
+  conversations       Conversation[]
+  conversationEntryPoints ConversationEntryPoint[]
+  conversationMessages ConversationMessage[]
+  tvPresentationProfiles TvPresentationProfile[]
+  tvEventOccurrences TvEventOccurrence[]
+  tvEventEvaluatorStates TvEventEvaluatorState[]
+  tvProfileEventPresentations TvProfileEventPresentation[]
+  tvDisplays TvDisplay[]
+  deploymentSources   DeploymentSource[]
+  deploymentServices  DeploymentService[]
+  deploymentVolumes   DeploymentVolume[]
+  deploymentDomains   DeploymentDomain[]
+  deployments         Deployment[]
+  deploymentSourceUploads DeploymentSourceUpload[]
+  workflowDefinitions WorkflowDefinition[]
+  workflowVersions WorkflowVersion[]
+  workflowRuns WorkflowRun[]
+  workflowEvents WorkflowEvent[]
+  workflowScheduleCursors WorkflowScheduleCursor[]
+
+  // Email capacity boost - when set and in the future, email capacity is multiplied by 4
+  emailCapacityBoostExpiresAt DateTime?
+
+  @@unique([projectId, branchId, organizationId])
+  @@unique([projectId, branchId, hasNoOrganization])
+}
+
+enum TvPresentationMode {
+  GENERAL
+}
+
+enum TvFinancialVisibility {
+  REDACTED
+  EXACT
+}
+
+model TvPresentationProfile {
+  id        String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenancyId String  @db.Uuid
+  tenancy   Tenancy @relation(fields: [tenancyId], references: [id], onDelete: Cascade)
+
+  displayName           String @db.VarChar(80)
+  normalizedDisplayName String @db.VarChar(80)
+  description           String @default("") @db.VarChar(240)
+  mode                  TvPresentationMode @default(GENERAL)
+
+  defaultDurationSeconds  Int
+  playlist                Json
+  interruptionPreferences Json
+  financialVisibility     TvFinancialVisibility @default(REDACTED)
+
+  version   Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenancyId, normalizedDisplayName], map: "TvPresentationProfile_tenancy_name_key")
+  @@index([tenancyId, updatedAt(sort: Desc), id], name: "TvPresentationProfile_tenancy_updatedAt_id_idx")
+}
+
+enum TvDisplayPairingState {
+  PENDING
+  APPROVED
+  CONSUMED
+  REJECTED
+}
+
+model TvDisplay {
+  id        String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenancyId String  @db.Uuid
+  tenancy   Tenancy @relation(fields: [tenancyId], references: [id], onDelete: Cascade)
+
+  profileId            String @db.VarChar(128)
+  displayName          String @db.VarChar(80)
+
+  pairedByAdminUserId String @db.Uuid
+  pairedAt             DateTime @default(now())
+  lastSeenAt           DateTime?
+  credentialVersion    Int @default(1)
+
+  financialVisibilityAcknowledgedAt DateTime?
+  financialVisibilityAcknowledgedByAdminUserId String? @db.Uuid
+
+  credentials TvDisplayCredential[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenancyId, updatedAt(sort: Desc), id], name: "TvDisplay_tenancy_updatedAt_id_idx")
+  @@index([tenancyId, profileId], name: "TvDisplay_profile_assignment_idx")
+}
+
+model TvDisplayPairingChallenge {
+  id               String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  pairingCode      String @unique @db.VarChar(8)
+  deviceSecretHash String @unique @db.VarChar(64)
+  state            TvDisplayPairingState @default(PENDING)
+
+  expiresAt       DateTime
+  lastPolledAt    DateTime?
+  invalidAttempts Int @default(0)
+
+  approvedTenancyId String? @db.Uuid
+  approvedProfileId String? @db.VarChar(128)
+  approvedDisplayName String? @db.VarChar(80)
+  approvedByAdminUserId String? @db.Uuid
+  approvedAt DateTime?
+  financialVisibilityAcknowledgedAt DateTime?
+  consumedAt DateTime?
+  rejectedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([expiresAt], name: "TvDisplayPairingChallenge_expiresAt_idx")
+}
+
+model TvDisplayCredential {
+  id        String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  displayId String @db.Uuid
+  display   TvDisplay @relation(fields: [displayId], references: [id], onDelete: Cascade)
+
+  familyId        String @db.Uuid
+  tokenHash       String @unique @db.VarChar(64)
+  parentId        String? @db.Uuid
+  issuedAt        DateTime @default(now())
+  expiresAt       DateTime
+  usedAt          DateTime?
+  revokedAt       DateTime?
+  replacementId  String? @db.Uuid
+
+  @@index([displayId, familyId, revokedAt], name: "TvDisplayCredential_family_idx")
+}
+
+model TvDisplayPairingRateLimitBucket {
+  keyHash   String @db.VarChar(64)
+  operation String @db.VarChar(40)
+  windowStart DateTime
+  attempts  Int @default(0)
+  expiresAt DateTime
+
+  @@id([keyHash, operation, windowStart])
+  @@index([expiresAt], name: "TvDisplayPairingRateLimitBucket_expiresAt_idx")
+}
+
+enum TvEventType {
+  EMAIL_DELIVERY_DEGRADATION
+  USER_MILESTONE
+  SUBSCRIPTION_COLLECTION_DEGRADATION
+}
+
+enum TvEventPresentationClass {
+  CELEBRATION
+  INCIDENT
+  CRITICAL_INCIDENT
+}
+
+enum TvEventOccurrenceLifecycle {
+  OCCURRED
+  ACTIVE
+  RESOLVED
+}
+
+enum TvPresentationSupersededReason {
+  NEWER_CELEBRATION
+  EXPIRED_BEFORE_PRESENTATION
+  POLICY_DISABLED
+  OCCURRENCE_REPLACED
+}
+
+model TvEventOccurrence {
+  id        String @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenancyId String @db.Uuid
+  tenancy   Tenancy @relation(fields: [tenancyId], references: [id], onDelete: Cascade)
+
+  eventType         TvEventType
+  presentationClass TvEventPresentationClass
+  lifecycle         TvEventOccurrenceLifecycle
+  deduplicationKey  String @db.VarChar(200)
+
+  title         String @db.VarChar(160)
+  summary       String @db.VarChar(480)
+  metricLabel   String @db.VarChar(80)
+  metricValue   String @db.VarChar(120)
+  expectedRange String? @db.VarChar(160)
+  sourceLabel   String @db.VarChar(120)
+
+  aggregateEvidence Json
+
+  occurredAt  DateTime
+  detectedAt  DateTime
+  activatedAt DateTime?
+  escalatedAt DateTime?
+  resolvedAt  DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  evaluatorStates TvEventEvaluatorState[] @relation("TvEvaluatorActiveOccurrence")
+  profilePresentations TvProfileEventPresentation[]
+
+  @@id([tenancyId, id])
+  @@unique([tenancyId, deduplicationKey], map: "TvEventOccurrence_tenancy_deduplication_key")
+  @@index([tenancyId, lifecycle, presentationClass, activatedAt(sort: Desc), id], name: "TvEventOccurrence_active_lookup_idx")
+  @@index([tenancyId, occurredAt(sort: Desc), id], name: "TvEventOccurrence_occurred_lookup_idx")
+  @@index([tenancyId, resolvedAt(sort: Desc), id], name: "TvEventOccurrence_resolved_lookup_idx")
+}
+
+model TvEventEvaluatorState {
+  tenancyId    String @db.Uuid
+  evaluatorKey String @db.VarChar(100)
+  tenancy      Tenancy @relation(fields: [tenancyId], references: [id], onDelete: Cascade)
+
+  nextEvaluationAt    DateTime
+  breachCount         Int @default(0)
+  criticalBreachCount Int @default(0)
+  recoveryCount       Int @default(0)
+  milestoneBaseline   BigInt?
+  typedState          Json
+
+  activeOccurrenceId String? @db.Uuid
+  // The migration's composite foreign key narrows SET NULL to activeOccurrenceId;
+  // tenancyId remains required and continues to own this evaluator state.
+  activeOccurrence   TvEventOccurrence? @relation("TvEvaluatorActiveOccurrence", fields: [tenancyId, activeOccurrenceId], references: [tenancyId, id], onDelete: SetNull, onUpdate: Cascade, map: "TvEventEvaluatorState_activeOccurrence_fkey")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@id([tenancyId, evaluatorKey])
+}
+
+model TvProfileEventPresentation {
+  tenancyId    String @db.Uuid
+  profileId    String @db.VarChar(128)
+  occurrenceId String @db.Uuid
+  tenancy      Tenancy @relation(fields: [tenancyId], references: [id], onDelete: Cascade)
+  occurrence   TvEventOccurrence @relation(fields: [tenancyId, occurrenceId], references: [tenancyId, id], onDelete: Cascade, onUpdate: Cascade, map: "TvProfileEventPresentation_occurrence_fkey")
+
+  takeoverStartedAt  DateTime?
+  takeoverEndsAt     DateTime?
+  recoveryEndsAt     DateTime?
+  highlightExpiresAt DateTime?
+  animationExpiresAt DateTime?
+  supersededAt       DateTime?
+  supersededReason   TvPresentationSupersededReason?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@id([tenancyId, profileId, occurrenceId])
+  @@index([tenancyId, profileId, supersededAt, highlightExpiresAt], name: "TvProfileEventPresentation_active_lookup_idx")
+}
+
+enum ManagedEmailDomainStatus {
+  PENDING_DNS
+  PENDING_VERIFICATION
+  VERIFIED
+  APPLIED
+  FAILED
+}
+
+model ManagedEmailDomain {
+  id String @id @default(uuid()) @db.Uuid
+
+  tenancyId String  @db.Uuid
+  tenancy   Tenancy @relation(fields: [tenancyId], references: [id], onDelete: Cascade)
+
+  projectId String
+  branchId  String
+
+  subdomain         String
+  senderLocalPart   String
+  resendDomainId    String @unique
+  nameServerRecords Json
+
+  status            ManagedEmailDomainStatus @default(PENDING_VERIFICATION)
+  providerStatusRaw String?
+  isActive          Boolean                  @default(true)
+  lastError         String?
+  verifiedAt        DateTime?
+  appliedAt         DateTime?
+  lastWebhookAt     DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenancyId, subdomain])
+  @@index([tenancyId, status, isActive], map: "ManagedEmailDomain_tenancy_status_active_idx")
+}
+
+model BranchConfigOverride {
+  projectId String
+  branchId  String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  config Json
+  source Json?
+  pushedConfigError Json?
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@id([projectId, branchId])
+}
+
+model ConfigAgentRun {
+  id String @id @default(uuid()) @db.Uuid
+
+  projectId String
+  branchId  String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  status     String
+  startedAt  DateTime
+  finishedAt DateTime?
+  commitUrl  String?
+  error      String?
+  sandboxId  String?
+  progress   String?
+  stage      String?
+  diff       String?   @db.Text
+  baseCommitSha String?
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, branchId])
+}
+
+model EnvironmentConfigOverride {
+  projectId String
+  branchId  String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  config Json
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@id([projectId, branchId])
+}
+
+model ExternalDbSyncMetadata {
+  id String @id @default(dbgenerated("gen_random_uuid()"))
+
+  singleton BooleanTrue @unique @default(TRUE)
+
+  sequencerEnabled Boolean @default(true)
+  pollerEnabled    Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Team {
+  tenancyId String @db.Uuid
+  teamId    String @default(uuid()) @db.Uuid
+
+  // Team IDs must be unique across all organizations (but not necessarily across all branches).
+  // To model this in the DB, we add two columns that are always equal to tenancy.projectId and tenancy.branchId.
+  mirroredProjectId String
+  mirroredBranchId  String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  displayName            String
+  clientMetadata         Json?
+  clientReadOnlyMetadata Json?
+  serverMetadata         Json?
+  profileImageUrl        String?
+
+  sequenceId             BigInt? @unique
+  shouldUpdateSequenceId Boolean @default(true)
+
+  teamMembers   TeamMember[]
+  projectApiKey ProjectApiKey[]
+
+  @@id([tenancyId, teamId])
+  @@unique([mirroredProjectId, mirroredBranchId, teamId])
+  @@index([tenancyId, sequenceId], name: "Team_tenancyId_sequenceId_idx")
+  @@index([shouldUpdateSequenceId, tenancyId], name: "Team_shouldUpdateSequenceId_idx")
+}
+
+// This is used for fields that are boolean but only the true value is part of a unique constraint.
+// For example if you want to allow only one selected team per user, you can make an optional field with this type and add a unique constraint.
+// Only the true value is considered for the unique constraint, the null value is not.
+enum BooleanTrue {
+  TRUE
+}
+
+model TeamMember {
+  tenancyId     String @db.Uuid
+  projectUserId String @db.Uuid
+  teamId        String @db.Uuid
+
+  // This will override the displayName of the user in this team.
+  displayName     String?
+  profileImageUrl String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sequenceId             BigInt? @unique
+  shouldUpdateSequenceId Boolean @default(true)
+
+  projectUser                 ProjectUser                  @relation(fields: [tenancyId, projectUserId], references: [tenancyId, projectUserId], onDelete: Cascade)
+  team                        Team                         @relation(fields: [tenancyId, teamId], references: [tenancyId, teamId], onDelete: Cascade)
+  isSelected                  BooleanTrue?
+  teamMemberDirectPermissions TeamMemberDirectPermission[]
+
+  @@id([tenancyId, projectUserId, teamId])
+  @@unique([tenancyId, projectUserId, isSelected])
+  @@index([tenancyId, projectUserId, isSelected], map: "TeamMember_projectUserId_isSelected_idx")
+  @@index([tenancyId, sequenceId], name: "TeamMember_tenancyId_sequenceId_idx")
+  @@index([shouldUpdateSequenceId, tenancyId], name: "TeamMember_shouldUpdateSequenceId_idx")
+}
+
+model ProjectUserDirectPermission {
+  id            String @id @default(uuid()) @db.Uuid
+  tenancyId     String @db.Uuid
+  projectUserId String @db.Uuid
+  permissionId  String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  projectUser ProjectUser @relation(fields: [tenancyId, projectUserId], references: [tenancyId, projectUserId], onDelete: Cascade)
+
+  sequenceId             BigInt?  @unique
+  shouldUpdateSequenceId Boolean  @default(true)
+
+  @@unique([tenancyId, projectUserId, permissionId])
+  @@index([shouldUpdateSequenceId, tenancyId], name: "ProjectUserDirectPermission_shouldUpdateSequenceId_idx")
+  @@index([tenancyId, sequenceId], name: "ProjectUserDirectPermission_tenancyId_sequenceId_idx")
+}
+
+model TeamMemberDirectPermission {
+  id            String @id @default(uuid()) @db.Uuid
+  tenancyId     String @db.Uuid
+  projectUserId String @db.Uuid
+  teamId        String @db.Uuid
+  permissionId  String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  teamMember TeamMember @relation(fields: [tenancyId, projectUserId, teamId], references: [tenancyId, projectUserId, teamId], onDelete: Cascade)
+
+  sequenceId             BigInt?  @unique
+  shouldUpdateSequenceId Boolean  @default(true)
+
+  @@unique([tenancyId, projectUserId, teamId, permissionId])
+  @@index([shouldUpdateSequenceId, tenancyId], name: "TeamMemberDirectPermission_shouldUpdateSequenceId_idx")
+  @@index([tenancyId, sequenceId], name: "TeamMemberDirectPermission_tenancyId_sequenceId_idx")
+}
+
+model ProjectUser {
+  tenancyId     String @db.Uuid
+  projectUserId String @default(uuid()) @db.Uuid
+
+  // User IDs must be unique across all organizations (but not necessarily across all branches).
+  // To model this in the DB, we add two columns that are always equal to tenancy.projectId and tenancy.branchId.
+  mirroredProjectId String
+  mirroredBranchId  String
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  lastActiveAt DateTime @default(now())
+
+  sequenceId             BigInt? @unique
+  shouldUpdateSequenceId Boolean @default(true)
+
+  displayName            String?
+  serverMetadata         Json?
+  clientReadOnlyMetadata Json?
+  clientMetadata         Json?
+  profileImageUrl        String?
+  requiresTotpMfa        Boolean @default(false)
+  totpSecret             Bytes?
+  isAnonymous            Boolean @default(false)
+  signUpCountryCode      String?
+
+  // Admin restriction fields - can be set by signup rules or manually by admins
+  restrictedByAdmin               Boolean @default(false)
+  restrictedByAdminReason         String? // Publicly viewable reason (shown to user)
+  restrictedByAdminPrivateDetails String? // Private details (server access only)
+
+  // Sign-up metadata
+  signedUpAt            DateTime @default(now())
+  signUpIp              String?
+  signUpIpTrusted       Boolean?
+  signUpEmailNormalized String?
+  signUpEmailBase       String?
+
+  // Sign-up risk scores (0-100, set at sign-up time)
+  signUpRiskScoreBot            Int @default(0) @db.SmallInt
+  signUpRiskScoreFreeTrialAbuse Int @default(0) @db.SmallInt
+
+  projectUserOAuthAccounts ProjectUserOAuthAccount[]
+  teamMembers              TeamMember[]
+  contactChannels          ContactChannel[]
+  authMethods              AuthMethod[]
+
+  // some backlinks for the unique constraints on some auth methods
+  passwordAuthMethod         PasswordAuthMethod[]
+  passkeyAuthMethod          PasskeyAuthMethod[]
+  otpAuthMethod              OtpAuthMethod[]
+  oauthAuthMethod            OAuthAuthMethod[]
+  projectApiKey              ProjectApiKey[]
+  directPermissions          ProjectUserDirectPermission[]
+  Project                    Project?                      @relation(fields: [projectId], references: [id])
+  projectId                  String?
+  userNotificationPreference UserNotificationPreference[]
+  sessionReplays             SessionReplay[]
+
+  @@id([tenancyId, projectUserId])
+  @@unique([mirroredProjectId, mirroredBranchId, projectUserId])
+  // indices for sorting and filtering
+  @@index([tenancyId, displayName(sort: Asc)], name: "ProjectUser_displayName_asc")
+  @@index([tenancyId, displayName(sort: Desc)], name: "ProjectUser_displayName_desc")
+  @@index([tenancyId, createdAt(sort: Asc)], name: "ProjectUser_createdAt_asc")
+  @@index([tenancyId, createdAt(sort: Desc)], name: "ProjectUser_createdAt_desc")
+  @@index([tenancyId, isAnonymous, signedUpAt(sort: Asc)], name: "ProjectUser_signedUpAt_asc")
+  @@index([tenancyId, isAnonymous, lastActiveAt], name: "ProjectUser_lastActiveAt")
+  @@index([tenancyId, isAnonymous, signUpIp, signedUpAt], name: "ProjectUser_signUpIp_recent_idx")
+  @@index([tenancyId, isAnonymous, signUpEmailNormalized, signedUpAt], name: "ProjectUser_signUpEmailNormalized_recent_idx")
+  @@index([tenancyId, isAnonymous, signUpEmailBase, signedUpAt], name: "ProjectUser_signUpEmailBase_recent_idx")
+  @@index([tenancyId, sequenceId], name: "ProjectUser_tenancyId_sequenceId_idx")
+  @@index([shouldUpdateSequenceId, tenancyId], name: "ProjectUser_shouldUpdateSequenceId_idx")
+}
+
+// This should be renamed to "OAuthAccount" as it is not always bound to a user
+// When ever a user goes through the OAuth flow and gets an account ID from the OAuth provider, we store that here.
+model ProjectUserOAuthAccount {
+  id                    String  @default(uuid()) @db.Uuid
+  tenancyId             String  @db.Uuid
+  projectUserId         String? @db.Uuid
+  configOAuthProviderId String
+  providerAccountId     String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // This is used for the user to distinguish between multiple accounts from the same provider.
+  // we might want to add more user info here later
+  email String?
+
+  // Before the OAuth account is connected to a user (for example, in the link oauth process), the projectUser is null.
+  projectUser      ProjectUser?       @relation(fields: [tenancyId, projectUserId], references: [tenancyId, projectUserId], onDelete: Cascade)
+  oauthTokens      OAuthToken[]
+  oauthAccessToken OAuthAccessToken[]
+
+  // if allowSignIn is true, oauthAuthMethod must be set
+  oauthAuthMethod        OAuthAuthMethod?
+  allowConnectedAccounts Boolean          @default(true)
+  allowSignIn            Boolean          @default(true)
+
+  sequenceId             BigInt?  @unique
+  shouldUpdateSequenceId Boolean  @default(true)
+
+  @@id([tenancyId, id])
+  @@unique([tenancyId, configOAuthProviderId, projectUserId, providerAccountId])
+  @@index([tenancyId, projectUserId])
+  @@index([tenancyId, sequenceId], name: "ProjectUserOAuthAccount_tenancyId_sequenceId_idx")
+  @@index([shouldUpdateSequenceId, tenancyId], name: "ProjectUserOAuthAccount_shouldUpdateSequenceId_idx")
+}
+
+model SessionReplay {
+  id String @db.Uuid
+
+  tenancyId      String @db.Uuid
+  projectUserId  String @db.Uuid
+  refreshTokenId String @db.Uuid
+
+  startedAt   DateTime
+  lastEventAt DateTime
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sequenceId             BigInt? @unique
+  shouldUpdateSequenceId Boolean @default(true)
+
+  projectUser ProjectUser @relation(fields: [tenancyId, projectUserId], references: [tenancyId, projectUserId], onDelete: Cascade)
+  tenancy     Tenancy     @relation(fields: [tenancyId], references: [id], onDelete: Cascade)
+
+  chunks SessionReplayChunk[]
+
+  @@id([tenancyId, id])
+  @@index([tenancyId, projectUserId, startedAt])
+  @@index([tenancyId, startedAt], name: "SessionReplay_tenancyId_startedAt_idx")
+  @@index([tenancyId, lastEventAt])
+  // index by updatedAt instead of lastEventAt because event timing can be spoofed
+  @@index([tenancyId, refreshTokenId, updatedAt])
+  @@index([tenancyId, sequenceId], name: "SessionReplay_tenancyId_sequenceId_idx")
+  @@index([shouldUpdateSequenceId, tenancyId], name: "SessionReplay_shouldUpdateSequenceId_idx")
+  @@map("SessionReplay")
+}
+
+model SessionReplayChunk {
+  id String @id @default(uuid()) @db.Uuid
+
+  tenancyId       String @db.Uuid
+  sessionReplayId String @map("sessionReplayId") @db.Uuid
+
+  // Unique per uploaded batch for a given session id.
+  batchId String @db.Uuid
+
+  // Ephemeral in-memory id generated by the client. Used to group recording chunks into per-tab replay segments.
+  sessionReplaySegmentId String
+
+  // Client-generated session id from localStorage, stored as metadata.
+  browserSessionId String
+
+  s3Key      String
+  eventCount Int
+  byteLength Int
+
+  firstEventAt DateTime
+  lastEventAt  DateTime
+
+  createdAt DateTime @default(now())
+
+  sessionReplay SessionReplay @relation(fields: [tenancyId, sessionReplayId], references: [tenancyId, id], onDelete: Cascade)
+  tenancy       Tenancy       @relation(fields: [tenancyId], references: [id], onDelete: Cascade)
+
+  @@unique([tenancyId, sessionReplayId, batchId])
+  @@index([tenancyId, sessionReplayId, createdAt])
+  @@map("SessionReplayChunk")
+}
+
+enum ContactChannelType {
+  EMAIL
+  // PHONE
+}
+
+model ContactChannel {
+  tenancyId     String @db.Uuid
+  projectUserId String @db.Uuid
+  id            String @default(uuid()) @db.Uuid
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sequenceId             BigInt? @unique
+  shouldUpdateSequenceId Boolean @default(true)
+
+  type        ContactChannelType
+  isPrimary   BooleanTrue?
+  usedForAuth BooleanTrue?
+  isVerified  Boolean
+  value       String
+
+  projectUser ProjectUser @relation(fields: [tenancyId, projectUserId], references: [tenancyId, projectUserId], onDelete: Cascade)
+
+  @@id([tenancyId, projectUserId, id])
+  // each user has at most one primary contact channel of each type
+  @@unique([tenancyId, projectUserId, type, isPrimary])
+  // value must be unique per user per type
+  @@unique([tenancyId, projectUserId, type, value])
+  // only one contact channel per project with the same value and type can be used for auth
+  @@unique([tenancyId, type, value, usedForAuth])
+  @@index([tenancyId, sequenceId], name: "ContactChannel_tenancyId_sequenceId_idx")
+  @@index([shouldUpdateSequenceId, tenancyId], name: "ContactChannel_shouldUpdateSequenceId_idx")
+}
+
+model AuthMethod {
+  tenancyId     String @db.Uuid
+  id            String @default(uuid()) @db.Uuid
+  projectUserId String @db.Uuid
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // exactly one of the xyzAuthMethods should be set
+  otpAuthMethod      OtpAuthMethod?
+  passwordAuthMethod PasswordAuthMethod?
+  passkeyAuthMethod  PasskeyAuthMethod?
+  oauthAuthMethod    OAuthAuthMethod?
+
+  projectUser ProjectUser @relation(fields: [tenancyId, projectUserId], references: [tenancyId, projectUserId], onDelete: Cascade)
+
+  @@id([tenancyId, id])
+  @@index([tenancyId, projectUserId])
+}
+
+model OtpAuthMethod {
+  tenancyId     String @db.Uuid
+  authMethodId  String @db.Uuid
+  projectUserId String @db.Uuid
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  authMethod  AuthMethod  @relation(fields: [tenancyId, authMethodId], references: [tenancyId, id], onDelete: Cascade)
+  projectUser ProjectUser @relation(fields: [tenancyId, projectUserId], references: [tenancyId, projectUserId], onDelete: Cascade)
+
+  @@id([tenancyId, authMethodId])
+  // a user can only have one OTP auth method
+  @@unique([tenancyId, projectUserId])
+}
+
+model PasswordAuthMethod {
+  tenancyId     String @db.Uuid
+  authMethodId  String @db.Uuid
+  projectUserId String @db.Uuid
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  passwordHash String
+
+  authMethod  AuthMethod  @relation(fields: [tenancyId, authMethodId], references: [tenancyId, id], onDelete: Cascade)
+  projectUser ProjectUser @relation(fields: [tenancyId, projectUserId], references: [tenancyId, projectUserId], onDelete: Cascade)
+
+  @@id([tenancyId, authMethodId])
+  // a user can only have one password auth method
+  @@unique([tenancyId, projectUserId])
+}
+
+model PasskeyAuthMethod {
+  tenancyId     String @db.Uuid
+  authMethodId  String @db.Uuid
+  projectUserId String @db.Uuid
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  credentialId         String
+  publicKey            String
+  userHandle           String
+  transports           String[]
+  credentialDeviceType String
+  counter              Int
+
+  authMethod  AuthMethod  @relation(fields: [tenancyId, authMethodId], references: [tenancyId, id], onDelete: Cascade)
+  projectUser ProjectUser @relation(fields: [tenancyId, projectUserId], references: [tenancyId, projectUserId], onDelete: Cascade)
+
+  @@id([tenancyId, authMethodId])
+  // a user can only have one password auth method
+  @@unique([tenancyId, projectUserId])
+}
+
+// This connects to projectUserOauthAccount, which might be shared between auth method and connected account.
+model OAuthAuthMethod {
+  tenancyId             String @db.Uuid
+  authMethodId          String @db.Uuid
+  configOAuthProviderId String
+  providerAccountId     String
+  projectUserId         String @db.Uuid
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  authMethod   AuthMethod              @relation(fields: [tenancyId, authMethodId], references: [tenancyId, id], onDelete: Cascade)
+  oauthAccount ProjectUserOAuthAccount @relation(fields: [tenancyId, configOAuthProviderId, projectUserId, providerAccountId], references: [tenancyId, configOAuthProviderId, projectUserId, providerAccountId])
+  projectUser  ProjectUser             @relation(fields: [tenancyId, projectUserId], references: [tenancyId, projectUserId], onDelete: Cascade)
+
+  @@id([tenancyId, authMethodId])
+  @@unique([tenancyId, configOAuthProviderId, providerAccountId])
+  @@unique([tenancyId, projectUserId, configOAuthProviderId])
+  @@unique([tenancyId, configOAuthProviderId, projectUserId, providerAccountId])
+}
+
+enum StandardOAuthProviderType {
+  GITHUB
+  FACEBOOK
+  GOOGLE
+  MICROSOFT
+  SPOTIFY
+  DISCORD
+  GITLAB
+  BITBUCKET
+  LINKEDIN
+  APPLE
+  X
+  TWITCH
+}
+
+model OAuthToken {
+  id String @id @default(uuid()) @db.Uuid
+
+  tenancyId      String @db.Uuid
+  oauthAccountId String @db.Uuid
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  projectUserOAuthAccount ProjectUserOAuthAccount @relation(fields: [tenancyId, oauthAccountId], references: [tenancyId, id], onDelete: Cascade)
+
+  refreshToken String
+  scopes       String[]
+  isValid      Boolean  @default(true)
+}
+
+model OAuthAccessToken {
+  id String @id @default(uuid()) @db.Uuid
+
+  tenancyId      String @db.Uuid
+  oauthAccountId String @db.Uuid
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  projectUserOAuthAccount ProjectUserOAuthAccount @relation(fields: [tenancyId, oauthAccountId], references: [tenancyId, id], onDelete: Cascade)
+
+  accessToken String
+  scopes      String[]
+  expiresAt   DateTime?
+  isValid     Boolean  @default(true)
+}
+
+model OAuthOuterInfo {
+  id String @id @default(uuid()) @db.Uuid
+
+  info       Json
+  innerState String   @unique
+  expiresAt  DateTime
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model ProjectUserRefreshToken {
+  id            String @default(uuid()) @db.Uuid
+  tenancyId     String @db.Uuid
+  projectUserId String @db.Uuid
+
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  lastActiveAt       DateTime @default(now())
+  lastActiveAtIpInfo Json?
+
+  refreshToken    String    @unique
+  expiresAt       DateTime?
+  isImpersonation Boolean   @default(false)
+
+  sequenceId             BigInt?  @unique
+  shouldUpdateSequenceId Boolean  @default(true)
+
+  @@id([tenancyId, id])
+  @@index([tenancyId, sequenceId], name: "ProjectUserRefreshToken_tenancyId_sequenceId_idx")
+  @@index([shouldUpdateSequenceId, tenancyId], name: "ProjectUserRefreshToken_shouldUpdateSequenceId_idx")
+}
+
+model ProjectUserAuthorizationCode {
+  tenancyId     String @db.Uuid
+  projectUserId String @db.Uuid
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  authorizationCode String   @unique
+  redirectUri       String
+  expiresAt         DateTime
+
+  codeChallenge       String
+  codeChallengeMethod String
+
+  newUser                  Boolean
+  afterCallbackRedirectUrl String?
+  /// Refresh token ID that should be granted when this authorization code is exchanged.
+  /// NULL means no specific refresh token is preselected, so the token endpoint follows normal issuance/reuse logic.
+  grantedRefreshTokenId    String? @db.Uuid
+
+  @@id([tenancyId, authorizationCode])
+}
+
+model VerificationCode {
+  projectId String
+  branchId  String
+  id        String @default(uuid()) @db.Uuid
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  type         VerificationCodeType
+  code         String
+  expiresAt    DateTime
+  usedAt       DateTime?
+  redirectUrl  String?
+  method       Json                 @default("null")
+  data         Json
+  attemptCount Int                  @default(0)
+
+  sequenceId             BigInt?  @unique
+  shouldUpdateSequenceId Boolean  @default(true)
+
+  @@id([projectId, branchId, id])
+  @@unique([projectId, branchId, code])
+  @@index([data(ops: JsonbPathOps)], type: Gin)
+  @@index([shouldUpdateSequenceId, type], name: "VerificationCode_shouldUpdateSequenceId_type_idx")
+}
+
+enum VerificationCodeType {
+  ONE_TIME_PASSWORD
+  PASSWORD_RESET
+  CONTACT_CHANNEL_VERIFICATION
+  TEAM_INVITATION
+  MFA_ATTEMPT
+  PASSKEY_REGISTRATION_CHALLENGE
+  PASSKEY_AUTHENTICATION_CHALLENGE
+  INTEGRATION_PROJECT_TRANSFER
+  PURCHASE_URL
+  BROWSER_ACTION
+}
+
+//#region API keys
+// Internal API keys
+model ApiKeySet {
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  id        String   @default(uuid()) @db.Uuid
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  description          String
+  expiresAt            DateTime
+  manuallyRevokedAt    DateTime?
+  publishableClientKey String?   @unique
+  secretServerKey      String?   @unique
+  superSecretAdminKey  String?   @unique
+
+  @@id([projectId, id])
+}
+
+//#endregion
+
+model ProjectApiKey {
+  tenancyId String @db.Uuid
+
+  id           String @default(uuid()) @db.Uuid
+  secretApiKey String @unique
+
+  // Validity and revocation
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  expiresAt         DateTime?
+  manuallyRevokedAt DateTime?
+  description       String
+  isPublic          Boolean
+
+  // exactly one of [teamId] or [projectUserId] must be set
+  teamId        String? @db.Uuid
+  projectUserId String? @db.Uuid
+
+  projectUser ProjectUser? @relation(fields: [tenancyId, projectUserId], references: [tenancyId, projectUserId], onDelete: Cascade)
+  team        Team?        @relation(fields: [tenancyId, teamId], references: [tenancyId, teamId], onDelete: Cascade)
+
+  @@id([tenancyId, id])
+}
+
+enum EmailTemplateType {
+  EMAIL_VERIFICATION
+  PASSWORD_RESET
+  MAGIC_LINK
+  TEAM_INVITATION
+  SIGN_IN_INVITATION
+}
+
+model EmailTemplate {
+  projectId String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  content Json
+  type    EmailTemplateType
+  subject String
+
+  @@id([projectId, type])
+}
+
+//#region IdP
+model IdPAccountToCdfcResultMapping {
+  idpId String
+  id    String
+
+  idpAccountId String @unique @db.Uuid
+  cdfcResult   Json
+
+  @@id([idpId, id])
+}
+
+model ProjectWrapperCodes {
+  idpId String
+  id    String @default(uuid()) @db.Uuid
+
+  interactionUid    String
+  authorizationCode String @unique
+
+  cdfcResult Json
+
+  @@id([idpId, id])
+}
+
+model IdPAdapterData {
+  idpId String
+  model String
+  id    String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  payload   Json
+  expiresAt DateTime
+
+  @@id([idpId, model, id])
+  @@index([payload(ops: JsonbPathOps)], type: Gin)
+  @@index([expiresAt])
+}
+
+//#endregion
+
+model ProvisionedProject {
+  projectId String  @id
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  clientId String
+}
+
+//#region Events
+
+model Event {
+  id String @id @default(uuid()) @db.Uuid
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // if isWide == false, then eventEndedAt is always equal to eventStartedAt
+  isWide         Boolean
+  eventStartedAt DateTime
+  eventEndedAt   DateTime
+
+  // TODO: add event_type, and at least one of either system_event_type or event_type is always set
+  systemEventTypeIds String[]
+  data               Json
+
+  // ============================== BEGIN END USER PROPERTIES ==============================
+  // Below are properties describing the end user that caused this event to be logged
+  // This is different from a request IP. See: apps/backend/src/lib/end-users.tsx
+
+  // Note that the IP may have been spoofed, unless isEndUserIpInfoGuessTrusted is true
+  endUserIpInfoGuessId        String?      @db.Uuid
+  endUserIpInfoGuess          EventIpInfo? @relation("EventIpInfo", fields: [endUserIpInfoGuessId], references: [id])
+  // If true, then endUserIpInfoGuess is not spoofed (might still be behind VPNs/proxies). If false, then the values may be spoofed.
+  isEndUserIpInfoGuessTrusted Boolean      @default(false)
+  // =============================== END END USER PROPERTIES ===============================
+
+  @@index([data(ops: JsonbPathOps)], type: Gin)
+  @@index([createdAt])
+  @@index([createdAt, id])
+}
+
+// An IP address that was seen in an event. Use the location fields instead of refetching the location from the ip, as the real-world geoip data may have changed since the event was logged.
+model EventIpInfo {
+  id String @id @default(uuid()) @db.Uuid
+
+  ip String
+
+  countryCode  String?
+  regionCode   String?
+  cityName     String?
+  latitude     Float?
+  longitude    Float?
+  tzIdentifier String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  events Event[] @relation("EventIpInfo")
+}
+
+//#endregion
+
+enum EmailOutboxStatus {
+  PAUSED
+  PREPARING
+  RENDERING
+  RENDER_ERROR
+  SCHEDULED
+  QUEUED
+  SENDING
+  SERVER_ERROR
+  SENT
+  SKIPPED
+  DELIVERY_DELAYED
+  BOUNCED
+  OPENED
+  CLICKED
+  MARKED_AS_SPAM
+}
+
+enum EmailOutboxSimpleStatus {
+  IN_PROGRESS
+  ERROR
+  OK
+}
+
+enum EmailOutboxSkippedReason {
+  USER_UNSUBSCRIBED
+  USER_ACCOUNT_DELETED
+  USER_HAS_NO_PRIMARY_EMAIL
+  NO_EMAIL_PROVIDED
+  LIKELY_NOT_DELIVERABLE
+  MANUALLY_CANCELLED
+}
+
+enum EmailOutboxCreatedWith {
+  DRAFT
+  PROGRAMMATIC_CALL
+}
+
+model EmailOutbox {
+  tenancyId String @db.Uuid
+
+  id String @default(uuid()) @db.Uuid
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // note: [tsxSource, themeId, isHighPriority, toUserIds, toEmails, extraRenderVariables, shouldSkipDeliverabilityCheck, overrideSubject, overrideNotificationCategoryId] can be changed, but only while startedSendingAt is not set, and any modification should reset fields like [renderedByWorkerId, startedRenderingAt, finishedRenderingAt, renderError*, rendered*, isQueued] and any other fields with similar semantics to null.
+  tsxSource                      String
+  themeId                        String?
+  isHighPriority                 Boolean
+  // Who the email is being sent to. { type: "user-primary-email", userId: string } | { type: "user-custom-emails", userId: string, emails: string[] } | { type: "custom-emails", emails: string[] }
+  to                             Json
+  extraRenderVariables           Json
+  overrideSubject                String?
+  overrideNotificationCategoryId String?
+  shouldSkipDeliverabilityCheck  Boolean
+
+  createdWith                     EmailOutboxCreatedWith
+  // If the email was created from a draft, it is kept around so we can later group by it. Must be set if and only if createdWith is DRAFT. (Enforced by EmailOutbox_email_draft_check and EmailOutbox_email_draft_reverse_check constraints.)
+  emailDraftId                    String?
+  // If the email was created from a template programmatically, it is kept around so we can later group by it. Must be NOT set if createdWith is NOT PROGRAMMATIC_CALL. If createdWith is PROGRAMMATIC_CALL and this is not set, then no template was used (eg. email was sent directly as HTML). (Enforced by EmailOutbox_email_programmatic_call_template_check constraint.)
+  emailProgrammaticCallTemplateId String?
+
+  // Computed from EmailOutbox can be the `status` of the email:
+  //
+  // - ⚪ `paused`           : isPaused (can happen at any time)
+  // - ⚫ `skipped`          : !isPaused && skippedReason (can happen at any time, like paused)
+  // - ⚪ `preparing`        : !isPaused && !skippedReason && !startedRenderingAt
+  // - ⚪ `rendering`        : !isPaused && !skippedReason && !finishedRenderingAt
+  // - 🔴 `render-error`     : !isPaused && !skippedReason && finishedRenderingAt && renderError
+  // - ⚪ `scheduled`        : !isPaused && !skippedReason && finishedRenderingAt && !renderError && !isQueued
+  // - ⚪ `queued`           : !isPaused && !skippedReason && finishedRenderingAt && !renderError && isQueued && !startedSendingAt
+  // - ⚪ `sending`          : !isPaused && !skippedReason && startedSendingAt && (canHaveDeliveryInfo ? !deliveredAt : !finishedSendingAt)
+  // - 🔴 `server-error`     : !isPaused && !skippedReason && finishedSendingAt && sendServerErrorMessage
+  // - 🟢 `sent`             : !isPaused && !skippedReason && finishedSendingAt && !openedAt && !markedAsSpamAt && !sendServerErrorMessage && (canHaveDeliveryInfo ? deliveredAt : finishedSendingAt)
+  // - ⚪ `delivery-delayed` : !isPaused && !skippedReason && canHaveDeliveryInfo && deliveryDelayedAt
+  // - 🔴 `bounced`          : !isPaused && !skippedReason && canHaveDeliveryInfo && bouncedAt
+  // - 🔵 `opened`           : !isPaused && !skippedReason && openedAt && !clickedAt && !markedAsSpamAt
+  // - 🟣 `clicked`          : !isPaused && !skippedReason && clickedAt && !markedAsSpamAt
+  // - 🟡 `marked-as-spam`   : !isPaused && !skippedReason && markedAsSpamAt
+  //
+  // NOTE: The `sending` status is NOT the same as `finishedSendingAt`! If the outbox can have delivery info, then
+  // `sending` is about deliveredAt. A better name would be `delivering`, but that name is less catchy than `sending`.
+  //
+  // This column is auto-generated as defined in the SQL migration. It can not be set manually. Note: Setting the dbgenerated value is NOT sufficient to create a generated column in Postgres! (Prisma dbgenerated only generates a value for the *default*, and won't reflect any updates.) You must create one manually in the migration file instead, and then update the value here to match.
+  status EmailOutboxStatus @default(dbgenerated("\nCASE\n    WHEN \"isPaused\" THEN 'PAUSED'::\"EmailOutboxStatus\"\n    WHEN (\"skippedReason\" IS NOT NULL) THEN 'SKIPPED'::\"EmailOutboxStatus\"\n    WHEN (\"startedRenderingAt\" IS NULL) THEN 'PREPARING'::\"EmailOutboxStatus\"\n    WHEN (\"finishedRenderingAt\" IS NULL) THEN 'RENDERING'::\"EmailOutboxStatus\"\n    WHEN (\"renderErrorExternalMessage\" IS NOT NULL) THEN 'RENDER_ERROR'::\"EmailOutboxStatus\"\n    WHEN ((\"startedSendingAt\" IS NULL) AND (\"isQueued\" IS FALSE)) THEN 'SCHEDULED'::\"EmailOutboxStatus\"\n    WHEN (\"startedSendingAt\" IS NULL) THEN 'QUEUED'::\"EmailOutboxStatus\"\n    WHEN (\"finishedSendingAt\" IS NULL) THEN 'SENDING'::\"EmailOutboxStatus\"\n    WHEN ((\"canHaveDeliveryInfo\" IS TRUE) AND (\"deliveredAt\" IS NULL)) THEN 'SENDING'::\"EmailOutboxStatus\"\n    WHEN (\"sendServerErrorExternalMessage\" IS NOT NULL) THEN 'SERVER_ERROR'::\"EmailOutboxStatus\"\n    WHEN (\"canHaveDeliveryInfo\" IS FALSE) THEN 'SENT'::\"EmailOutboxStatus\"\n    WHEN (\"markedAsSpamAt\" IS NOT NULL) THEN 'MARKED_AS_SPAM'::\"EmailOutboxStatus\"\n    WHEN (\"clickedAt\" IS NOT NULL) THEN 'CLICKED'::\"EmailOutboxStatus\"\n    WHEN (\"openedAt\" IS NOT NULL) THEN 'OPENED'::\"EmailOutboxStatus\"\n    WHEN (\"bouncedAt\" IS NOT NULL) THEN 'BOUNCED'::\"EmailOutboxStatus\"\n    WHEN (\"deliveryDelayedAt\" IS NOT NULL) THEN 'DELIVERY_DELAYED'::\"EmailOutboxStatus\"\n    ELSE 'SENT'::\"EmailOutboxStatus\"\nEND"))
+
+  // A simplified version of the status property.
+  // In terms of the color mapping of `status`, white statuses have a `simpleStatus` of `in-progress`, red statuses have a `simpleStatus` of `error`, and everything else has a `simpleStatus` of `ok`.
+  // 
+  // This column is auto-generated as defined in the SQL migration. It can not be set manually. See the note above on EmailOutboxStatus.status for more details on dbgenerated values.
+  simpleStatus EmailOutboxSimpleStatus @default(dbgenerated("\nCASE\n    WHEN (\"skippedReason\" IS NOT NULL) THEN 'OK'::\"EmailOutboxSimpleStatus\"\n    WHEN ((\"renderErrorExternalMessage\" IS NOT NULL) OR (\"sendServerErrorExternalMessage\" IS NOT NULL) OR (\"bouncedAt\" IS NOT NULL)) THEN 'ERROR'::\"EmailOutboxSimpleStatus\"\n    WHEN ((\"finishedSendingAt\" IS NOT NULL) AND ((\"canHaveDeliveryInfo\" IS FALSE) OR (\"deliveredAt\" IS NOT NULL))) THEN 'OK'::\"EmailOutboxSimpleStatus\"\n    WHEN ((\"finishedSendingAt\" IS NULL) OR ((\"canHaveDeliveryInfo\" IS TRUE) AND (\"deliveredAt\" IS NULL))) THEN 'IN_PROGRESS'::\"EmailOutboxSimpleStatus\"\n    ELSE 'OK'::\"EmailOutboxSimpleStatus\"\nEND"))
+
+  // priority is the sending priority of the email among all emails that are not yet sent but already past their scheduled time. Higher priority means it should be sent sooner.
+  //
+  // This column is auto-generated based on the following formula:
+  //  priority = (isHighPriority ? 100 : 0) + (renderedIsTransactional ? 10 : 0)
+  // See the note above on EmailOutboxStatus.status for more details on dbgenerated values.
+  priority Int @default(dbgenerated("(\nCASE\n    WHEN \"isHighPriority\" THEN 100\n    ELSE 0\nEND +\nCASE\n    WHEN \"renderedIsTransactional\" THEN 10\n    ELSE 0\nEND)"))
+
+  isPaused Boolean @default(false)
+
+  // either both or neither of [renderedByWorkerId, startedRenderingAt] must be set
+  renderedByWorkerId  String?   @db.Uuid
+  startedRenderingAt  DateTime?
+  // if startedRenderingAt is not set, then finishedRenderingAt is also not set
+  finishedRenderingAt DateTime?
+
+  // if finishedRenderingAt is set, then exactly one of [renderedHtml, renderedText, renderedSubject, renderedIsTransactional, renderedNotificationCategoryId] or [renderErrorExternalMessage, renderErrorExternalDetails, renderErrorInternalMessage, renderErrorInternalDetails] must be set; if finishedRenderingAt is not set, then none of the aforementioned fields are set
+  renderErrorExternalMessage     String?
+  renderErrorExternalDetails     Json?
+  renderErrorInternalMessage     String?
+  renderErrorInternalDetails     Json?
+  renderedHtml                   String?
+  renderedText                   String?
+  renderedSubject                String?
+  renderedIsTransactional        Boolean?
+  renderedNotificationCategoryId String?
+
+  // The scheduled time of when the email should be added to the queue. Can be edited, but only if the email has not yet started sending. Doing so should set isQueued to false.
+  scheduledAt DateTime
+
+  // Whether the email has been queued for sending. Once queued, this stays true unless the email is retried or rescheduled.
+  isQueued Boolean @default(false)
+
+  // A generated column that is equal to scheduledAt if isQueued is false, otherwise null. See the note above on EmailOutboxStatus.status for more details on dbgenerated values.
+  scheduledAtIfNotYetQueued DateTime? @default(dbgenerated("\nCASE\n    WHEN \"isQueued\" THEN NULL::timestamp without time zone\n    ELSE \"scheduledAt\"\nEND"))
+
+  // if finishedRenderingAt is not set, then startedSendingAt is also not set
+  startedSendingAt  DateTime?
+  // if startedSendingAt is not set, then finishedSendingAt is also not set
+  finishedSendingAt DateTime?
+
+  // Deferred retry fields for email sending
+  // Number of send retries attempted (starts at 0, incremented on each failure). Reset when email content is edited.
+  sendRetries       Int       @default(0)
+  // When to retry sending (null = not waiting for retry). Set when a retryable error occurs. Reset when email content is edited. Must be null if sendRetries is 0 (enforced by EmailOutbox_nextSendRetryAt_requires_failure). Must be null when finishedSendingAt is set (enforced by EmailOutbox_no_retry_after_finished).
+  nextSendRetryAt   DateTime?
+  // JSON array of errors from each failed send attempt. Each entry has: { attemptNumber, timestamp, externalMessage, externalDetails, internalMessage, internalDetails }. Reset when email content is edited. Must be null if sendRetries is 0 (enforced by EmailOutbox_sendAttemptErrors_requires_failure).
+  sendAttemptErrors Json?
+
+  // A generated column that is equal to finishedSendingAt if canHaveDeliveryInfo is false, otherwise deliveredAt.
+  sentAt DateTime? @default(dbgenerated("\nCASE\n    WHEN (\"canHaveDeliveryInfo\" IS TRUE) THEN \"deliveredAt\"\n    WHEN (\"canHaveDeliveryInfo\" IS FALSE) THEN \"finishedSendingAt\"\n    ELSE NULL::timestamp without time zone\nEND"))
+
+  // either all or none of [sendServerErrorExternalMessage, sendServerErrorExternalDetails, sendServerErrorInternalMessage, sendServerErrorInternalDetails] must be set. If finishedSendingAt is not set, then none of these are set.
+  sendServerErrorExternalMessage String?
+  sendServerErrorExternalDetails Json?
+  sendServerErrorInternalMessage String?
+  sendServerErrorInternalDetails Json?
+
+  // The reason why the email was skipped. Unlike most status-related fields, this can be set at any point in the email lifecycle (like isPaused). skippedDetails must be set if and only if skippedReason is set. (Enforced by EmailOutbox_skipped_details_consistency_check constraint.)
+  skippedReason  EmailOutboxSkippedReason?
+  skippedDetails Json?
+
+  // Whether this email was sent through a server that provides delivery info. This is set if and only if finishedSendingAt is set (it is only determined once the email has been sent). If canHaveDeliveryInfo is false, then [deliveredAt, deliveryDelayedAt, bouncedAt] are all not set. This flag is usually set to true if the email provider is Resend.
+  canHaveDeliveryInfo Boolean?
+
+  // at most one of [deliveredAt, deliveryDelayedAt, bouncedAt] can be set. If finishedSendingAt is not set, then none of these are set.
+  deliveredAt       DateTime?
+  deliveryDelayedAt DateTime?
+  bouncedAt         DateTime?
+
+  // if finishedSendingAt is not set, then openedAt is also not set
+  openedAt       DateTime?
+  // note: setting clickedAt should also set openedAt if it's not set yet
+  clickedAt      DateTime?
+  unsubscribedAt DateTime?
+  markedAsSpamAt DateTime?
+
+  sequenceId             BigInt? @unique
+  shouldUpdateSequenceId Boolean @default(true)
+
+  tenancy Tenancy @relation(fields: [tenancyId], references: [id], onDelete: Cascade)
+
+  @@id([tenancyId, id])
+  @@index([tenancyId, createdAt], name: "EmailOutbox_tenancyId_createdAt_idx")
+  @@index([tenancyId, finishedSendingAt(sort: Desc), scheduledAtIfNotYetQueued(sort: Desc), priority, id], map: "EmailOutbox_ordering_idx")
+  @@index([tenancyId, startedSendingAt], name: "EmailOutbox_tenancyId_startedSendingAt_idx")
+  @@index([tenancyId, simpleStatus], map: "EmailOutbox_simple_status_tenancy_idx")
+  @@index([tenancyId, status], map: "EmailOutbox_status_tenancy_idx")
+  @@index([isQueued], map: "EmailOutbox_isQueued_idx")
+  @@index([tenancyId, sequenceId], name: "EmailOutbox_tenancyId_sequenceId_idx")
+  @@index([shouldUpdateSequenceId, tenancyId], name: "EmailOutbox_shouldUpdateSequenceId_idx")
+}
+
+model EmailOutboxProcessingMetadata {
+  key String @id
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  lastExecutedAt DateTime?
+}
+
+model EmailDraft {
+  tenancyId String @db.Uuid
+
+  id String @default(uuid()) @db.Uuid
+
+  displayName String
+  themeMode   DraftThemeMode @default(PROJECT_DEFAULT)
+  themeId     String?
+  tsxSource   String
+  sentAt      DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@id([tenancyId, id])
+}
+
+enum DraftThemeMode {
+  PROJECT_DEFAULT
+  NONE
+  CUSTOM
+}
+
+model CliAuthAttempt {
+  tenancyId String @db.Uuid
+
+  id           String    @default(uuid()) @db.Uuid
+  pollingCode      String    @unique
+  loginCode        String    @unique
+  refreshToken     String?
+  anonRefreshToken String?
+  expiresAt        DateTime
+  usedAt           DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@id([tenancyId, id])
+  @@index([tenancyId, createdAt(sort: Desc), id(sort: Desc)], name: "CliAuthAttempt_tenancyId_createdAt_id_idx")
+}
+
+model UserNotificationPreference {
+  id                     String @default(uuid()) @db.Uuid
+  tenancyId              String @db.Uuid
+  projectUserId          String @db.Uuid
+  notificationCategoryId String @db.Uuid
+
+  enabled     Boolean
+  projectUser ProjectUser @relation(fields: [tenancyId, projectUserId], references: [tenancyId, projectUserId], onDelete: Cascade)
+
+  sequenceId             BigInt?  @unique
+  shouldUpdateSequenceId Boolean  @default(true)
+
+  @@id([tenancyId, id])
+  @@unique([tenancyId, projectUserId, notificationCategoryId])
+  @@index([shouldUpdateSequenceId, tenancyId], name: "UserNotificationPreference_shouldUpdateSequenceId_idx")
+  @@index([tenancyId, sequenceId], name: "UserNotificationPreference_tenancyId_sequenceId_idx")
+}
+
+model Conversation {
+  id            String @default(uuid()) @db.Uuid
+  tenancyId     String @db.Uuid
+  projectUserId String? @db.Uuid
+  teamId        String? @db.Uuid
+
+  subject       String
+  status        String
+  priority      String
+  source        String
+  assignedToUserId      String?
+  assignedToDisplayName String?
+  tags                  Json?
+  firstResponseDueAt    DateTime?
+  firstResponseAt       DateTime?
+  nextResponseDueAt     DateTime?
+  lastCustomerReplyAt   DateTime?
+  lastAgentReplyAt      DateTime?
+  metadata              Json?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  lastMessageAt DateTime @default(now())
+  lastInboundAt DateTime?
+  lastOutboundAt DateTime?
+  closedAt      DateTime?
+
+  tenancy     Tenancy                @relation(fields: [tenancyId], references: [id], onDelete: Cascade)
+  messages    ConversationMessage[]
+  entryPoints ConversationEntryPoint[]
+
+  @@id([tenancyId, id])
+  @@index([tenancyId, projectUserId, lastMessageAt(sort: Desc)], name: "Conversation_user_lastMessageAt_idx")
+  @@index([tenancyId, status, lastMessageAt(sort: Desc)], name: "Conversation_status_lastMessageAt_idx")
+  @@index([tenancyId, teamId, lastMessageAt(sort: Desc)], name: "Conversation_team_lastMessageAt_idx")
+}
+
+model ConversationEntryPoint {
+  id             String @default(uuid()) @db.Uuid
+  tenancyId      String @db.Uuid
+  conversationId String @db.Uuid
+
+  channelType       String
+  adapterKey        String
+  externalChannelId String?
+  isEntryPoint      Boolean @default(false)
+  metadata          Json?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  tenancy      Tenancy      @relation(fields: [tenancyId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [tenancyId, conversationId], references: [tenancyId, id], onDelete: Cascade)
+  messages     ConversationMessage[]
+
+  @@id([tenancyId, id])
+  @@index([tenancyId, conversationId, createdAt], name: "ConversationEntryPoint_conversation_createdAt_idx")
+  @@index([tenancyId, channelType, adapterKey], name: "ConversationEntryPoint_type_adapter_idx")
+}
+
+model ConversationMessage {
+  id        String @default(uuid()) @db.Uuid
+  tenancyId String @db.Uuid
+  conversationId String @db.Uuid
+  channelId      String? @db.Uuid
+
+  messageType        String
+  senderType         String
+  senderId           String?
+  senderDisplayName  String?
+  senderPrimaryEmail String?
+  body               String?
+  attachments        Json?
+  metadata           Json?
+  createdAt          DateTime @default(now())
+
+  tenancy      Tenancy      @relation(fields: [tenancyId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [tenancyId, conversationId], references: [tenancyId, id], onDelete: Cascade)
+  channel      ConversationEntryPoint? @relation(fields: [tenancyId, channelId], references: [tenancyId, id], onDelete: NoAction)
+
+  @@id([tenancyId, id])
+  @@index([tenancyId, conversationId, createdAt], name: "ConversationMessage_conversation_createdAt_idx")
+  @@index([tenancyId, channelId, createdAt], name: "ConversationMessage_channel_createdAt_idx")
+}
+
+model ThreadMessage {
+  id        String @default(uuid()) @db.Uuid
+  tenancyId String @db.Uuid
+  threadId  String @db.Uuid
+
+  content   Json
+  createdAt DateTime @default(now())
+
+  @@id([tenancyId, id])
+}
+
+model AiConversation {
+  id            String   @id @default(uuid()) @db.Uuid
+  projectUserId String   @db.Uuid
+  projectId     String
+  project       Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  title         String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  messages      AiMessage[]
+
+  @@index([projectUserId, projectId, updatedAt(sort: Desc)])
+}
+
+model AiMessage {
+  id             String         @id @default(uuid()) @db.Uuid
+  conversationId String         @db.Uuid
+  position       Int
+  role           String
+  content        Json
+  createdAt      DateTime       @default(now())
+  conversation   AiConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, position])
+}
+
+// Durable, internal-only history for the public skill /ask endpoint and the
+// ask_hexclave MCP tool. Request metadata is deliberately allowlisted at the
+// transport boundary so credentials and arbitrary headers never reach this table.
+model AskHexclaveCall {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+
+  createdAt DateTime @default(now())
+
+  transport     String
+  conversationId String
+  question      String @db.Text
+  response      String @db.Text
+  reason        String @db.Text
+  userPrompt    String @db.Text
+  context       String? @db.Text
+  user          String? @db.Text
+  project       String? @db.Text
+
+  requestIp         String?
+  requestIpSource   String?
+  userAgent         String? @db.Text
+  requestHost       String?
+  mcpProtocolVersion String?
+
+  modelId       String
+  stepCount     Int
+  durationMs    Int
+  innerToolCalls Json
+
+  @@index([createdAt(sort: Desc), id(sort: Desc)])
+  @@index([transport, createdAt(sort: Desc), id(sort: Desc)])
+  @@index([conversationId, createdAt(sort: Asc), id(sort: Asc)])
+}
+
+enum CustomerType {
+  USER
+  TEAM
+  CUSTOM
+}
+
+enum SubscriptionStatus {
+  active
+  trialing
+  canceled
+  paused
+  incomplete
+  incomplete_expired
+  past_due
+  unpaid
+}
+
+enum PurchaseCreationSource {
+  PURCHASE_PAGE
+  TEST_MODE
+  API_GRANT
+}
+
+model Subscription {
+  id           String       @default(uuid()) @db.Uuid
+  tenancyId    String       @db.Uuid
+  customerId   String
+  customerType CustomerType
+  productId    String?
+  priceId      String?
+  product      Json
+  quantity     Int          @default(1)
+
+  stripeSubscriptionId   String?
+  status                 SubscriptionStatus
+  currentPeriodEnd       DateTime
+  currentPeriodStart     DateTime
+  cancelAtPeriodEnd      Boolean
+  canceledAt             DateTime?
+  endedAt                DateTime?
+
+  refundedAt DateTime?
+
+  // Set when a refund explicitly ends product access via end_action="now".
+  // Distinct from `endedAt` (which fires for natural expiry, webhook cancel,
+  // etc.) so phase-1's subscription-end mapper can tell refund-driven ends
+  // apart and avoid emitting a second product-revocation entry — the refund
+  // row already carries one. See refund/route.tsx and phase-1/transactions.ts
+  // for the consumer side.
+  productRevokedAt DateTime?
+
+  creationSource PurchaseCreationSource
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+
+  SubscriptionInvoices SubscriptionInvoice[]
+
+  @@id([tenancyId, id])
+  @@unique([tenancyId, stripeSubscriptionId])
+  @@index([tenancyId, createdAt], name: "Subscription_tenancyId_createdAt_idx")
+}
+
+model ProductVersion {
+  tenancyId        String   @db.Uuid
+  productVersionId String
+  productId        String?
+  productJson      Json
+  createdAt        DateTime @default(now())
+
+  @@id([tenancyId, productVersionId])
+}
+
+model ItemQuantityChange {
+  id           String       @default(uuid()) @db.Uuid
+  tenancyId    String       @db.Uuid
+  customerId   String
+  customerType CustomerType
+  itemId       String
+  quantity     Int
+  description  String?
+  expiresAt    DateTime?
+  createdAt    DateTime     @default(now())
+
+  @@id([tenancyId, id])
+  @@index([tenancyId, customerId, expiresAt])
+}
+
+model OneTimePurchase {
+  id                    String                 @default(uuid()) @db.Uuid
+  tenancyId             String                 @db.Uuid
+  customerId            String
+  customerType          CustomerType
+  productId             String?
+  priceId               String?
+  product               Json
+  quantity              Int
+  stripePaymentIntentId String?
+  amountReceived        Int?
+  currency              String?
+  paidAt                DateTime?
+  createdAt             DateTime               @default(now())
+  revokedAt             DateTime?
+  refundedAt            DateTime?
+  creationSource        PurchaseCreationSource
+
+  @@id([tenancyId, id])
+  @@unique([tenancyId, stripePaymentIntentId])
+}
+
+model DataVaultEntry {
+  id        String   @default(uuid()) @db.Uuid
+  tenancyId String   @db.Uuid
+  storeId   String
+  hashedKey String
+  encrypted Json // Contains { edkBase64, ciphertextBase64 } from encryptWithKms()
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@id([tenancyId, id])
+  @@unique([tenancyId, storeId, hashedKey])
+  @@index([tenancyId, storeId])
+}
+
+model CacheEntry {
+  id        String   @id @default(uuid()) @db.Uuid
+  namespace String
+  cacheKey  String
+  payload   Json
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([namespace, cacheKey])
+}
+
+model SubscriptionInvoice {
+  id                            String  @default(uuid()) @db.Uuid
+  tenancyId                     String  @db.Uuid
+  stripeSubscriptionId          String
+  stripeInvoiceId               String
+  isSubscriptionCreationInvoice Boolean
+  status                        String?
+  amountTotal                   Int?
+  hostedInvoiceUrl              String?
+  paidAt                        DateTime?
+  // Event time of the newest exact invoice outcome applied; NULL means no exact outcome has been applied.
+  paymentOutcomeEventAt         DateTime?
+  markedUncollectibleAt         DateTime?
+  voidedAt                      DateTime?
+  currency                      String?
+  amountPaid                    Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  subscription Subscription @relation(fields: [tenancyId, stripeSubscriptionId], references: [tenancyId, stripeSubscriptionId])
+
+  @@id([tenancyId, id])
+  @@unique([tenancyId, stripeInvoiceId])
+  @@index([tenancyId, createdAt], name: "SubscriptionInvoice_tenancyId_createdAt_idx")
+}
+
+// Durable backup of Bulldozer `payments-manual-transactions` (refunds today).
+// Dual-written from the refund routes; also filled by a one-off HTTP export from
+// Bulldozer so history survives an LMDB rebuild/backfill.
+model ManualTransaction {
+  tenancyId       String       @db.Uuid
+  txnId           String
+  type            String
+  customerId      String
+  customerType    CustomerType
+  paymentProvider String?
+  effectiveAt     DateTime
+  createdAt       DateTime
+  entries         Json
+
+  @@id([tenancyId, txnId])
+  @@index([tenancyId, createdAt])
+}
+
+model OutgoingRequest {
+  id String @id @default(uuid()) @db.Uuid
+
+  createdAt DateTime @default(now())
+
+  qstashOptions       Json
+  startedFulfillingAt DateTime?
+  deduplicationKey    String?
+
+  // Partial unique index on deduplicationKey WHERE startedFulfillingAt IS NULL
+  // is created in a custom migration (not expressible in Prisma schema)
+  @@index([startedFulfillingAt, createdAt])
+  @@index([startedFulfillingAt, deduplicationKey])
+}
+
+enum StripeWebhookEventStatus {
+  PENDING
+  PROCESSED
+  FAILED
+}
+
+// Idempotency + recovery log for incoming Stripe webhook events. Each event is
+// persisted synchronously (keyed on the Stripe `event.id`) before we ack 200 to
+// Stripe, so redeliveries are deduped and the full `payload` of any
+// PENDING/FAILED row can be replayed manually. Not tenancy-scoped: the Stripe
+// account -> tenancy resolution happens during processing, not here.
+model StripeWebhookEvent {
+  id String @id @default(uuid()) @db.Uuid
+
+  stripeEventId   String                   @unique
+  eventType       String
+  stripeAccountId String?
+  payload         Json
+  status          StripeWebhookEventStatus @default(PENDING)
+  lastError       String?
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  processedAt DateTime?
+}
+
+// BulldozerStorageEngine is managed externally (see prisma.config.ts
+// `tables.external`). It's created by migrations and interacted with
+// via raw SQL — not through the Prisma client. Keeping it out of the
+// Prisma schema avoids drift warnings for features Prisma can't represent
+// (generated columns, self-referential FKs on jsonb[] columns, etc.).
+
+model BulldozerTimeFoldQueue {
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tableStoragePath Json[]
+  groupKey         Json
+  rowIdentifier    String
+  scheduledAt      DateTime @db.Timestamptz
+  stateAfter       Json
+  rowData          Json
+  reducerSql       String
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @default(now()) @updatedAt
+
+  @@unique([tableStoragePath, groupKey, rowIdentifier], map: "BulldozerTimeFoldQueue_table_group_row_key")
+  @@index([scheduledAt], map: "BulldozerTimeFoldQueue_scheduledAt_idx")
+}
+
+model BulldozerTimeFoldMetadata {
+  key             String   @id
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @default(now()) @updatedAt
+  lastProcessedAt DateTime @db.Timestamptz
+}
+
+// BulldozerTimeFoldDownstreamCascade is managed externally (see
+// prisma.config.ts `tables.external`). Same reason as BulldozerStorageEngine
+// above: its primary key is on a JSONB[] column, which Prisma's @id
+// attribute rejects ("fields that are marked as id must be required"; list
+// types are treated as non-required). It's written only by bulldozer
+// internals (declareTimeFoldTable.init()/.delete()) and read by
+// public.bulldozer_timefold_process_queue() — never via the Prisma client.
+
+model DeletedRow {
+  id        String @id @default(uuid()) @db.Uuid
+  tenancyId String @db.Uuid
+  tableName String
+
+  sequenceId             BigInt? @unique
+  shouldUpdateSequenceId Boolean @default(true)
+
+  primaryKey Json
+  data       Json?
+
+  deletedAt           DateTime  @default(now())
+  startedFulfillingAt DateTime?
+
+  @@index([tableName])
+  @@index([tenancyId])
+  // composite index for efficient querying of deleted rows by tenant and table, ordered by sequence
+  @@index([tenancyId, tableName, sequenceId])
+  @@index([shouldUpdateSequenceId, tenancyId], name: "DeletedRow_shouldUpdateSequenceId_idx")
+}
+
+// ================== Project secrets ==================
+// Per-project credential values, write-only through the API
+// (set/overwrite/delete, never read back) and envelope-encrypted with the same
+// KMS flow as the data vault's server-side layer (`encryptWithKms`), so
+// plaintext never touches this table. Only the feature consuming a secret
+// decrypts it, server-side.
+//
+// Deployments are the only consumer today (`secret()` env vars in the deploy
+// file's `deploy` export name a key here), but the store deliberately isn't
+// deployments-specific — see @/lib/project-secrets.
+//
+// Keyed by project, not tenancy: these are infrastructure credentials that
+// branches share by design, and a per-organization copy of an API key would be
+// meaningless. If a consumer ever needs per-branch values, the intended shape is
+// a nullable `branchId` (null = every branch) resolved
+// exact-match-then-project-wide; that needs a partial unique index for the NULL
+// case, which Prisma can't express, so it wants a hand-written migration.
+model ProjectSecret {
+  projectId String
+
+  id String @default(uuid()) @db.Uuid
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  key String
+  // { edkBase64, ciphertextBase64 } from encryptWithKms()
+  encrypted Json
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@id([projectId, id])
+  @@unique([projectId, key])
+}
+
+// ================== Deployments ==================
+// State for the Deployments app.
+//
+// A project owns DEPLOYMENT SOURCES; a source is deployed one or more times;
+// each deployment ships a set of SERVICES. A source is one deploy file
+// (hexclave.deploy.ts, named by its own `deploymentGroupId` export) and what one
+// `hexclave deploy` ships — one upload, one build — so a project deployed from
+// several repositories gives each of them a source of its own. Service ids stay
+// unique per PROJECT, so a reference never has to name a source.
+//
+// Service definitions come from the `services` export of the deploy file:
+// `hexclave deploy` evaluates it and syncs the parts the server needs (build
+// config, env var definitions) into DeploymentService rows, which are the
+// authoritative server-side copy — the dashboard renders services from these
+// rows and cannot edit them. Secret VALUES are never part of a definition: env
+// vars of type "secret" only name a key in the ProjectSecret store above.
+//
+// Two things deliberately OUTLIVE the service that uses them, because the
+// resource behind them does: a persistent volume (a disk with tenant data) is
+// owned by the CLUSTER and merely mounted by a service, and a custom domain (a
+// hostname with a certificate) is owned by the PROJECT and merely pointed at a
+// service. Dropping a service from a deploy file tears the service down and
+// leaves both behind, unattached, until someone deletes them explicitly.
+
+model DeploymentSource {
+  tenancyId String @db.Uuid
+
+  id String @default(uuid()) @db.Uuid
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // The deploy file's own `deploymentGroupId` export — which deploy file (and so
+  // which repository) these services were deployed from. Created implicitly by
+  // the first deploy that names it. Projects deployed before services moved out
+  // of hexclave.config.ts still have a source named after that file; nothing
+  // writes one any more.
+  sourceId String
+
+  // How much memory this source's BUILDER machine gets, in megabytes. Null = the
+  // deployment picks the floor its build shape needs.
+  //
+  // On the source rather than on a service because one `hexclave deploy` builds
+  // every service of the source on ONE machine: there is a single builder to
+  // size, and a per-service column could only ever record a request that another
+  // service's request overrode. Written by the same sync that stores the service
+  // definitions, so it rides that sync's fence rather than needing one of its own.
+  builderMemoryMb Int?
+
+  // Which infrastructure runtime this source's services run on: "fly" (the
+  // default, and what an absent `version` export in the deploy file means) or
+  // "gcp" (opted into with an internal `version` token). Written by the same
+  // sync that stores the definitions. Every source of one project must agree —
+  // services share a private network, which cannot span providers — and the
+  // sync route refuses one that does not; see syncSourceServices.
+  runtime String @default("fly")
+
+  tenancy     Tenancy             @relation(fields: [tenancyId], references: [id], onDelete: Cascade)
+  services    DeploymentService[]
+  deployments Deployment[]
+  volumes     DeploymentVolume[]
+
+  @@id([tenancyId, id])
+  @@unique([tenancyId, sourceId])
+}
+
+model DeploymentService {
+  tenancyId String @db.Uuid
+
+  id String @default(uuid()) @db.Uuid
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Which deployment source last declared this service. A service belongs to
+  // exactly one: the deploy file that declares it owns it, and a sync from
+  // another source claiming the same id is refused rather than silently taking
+  // it over.
+  sourceRowId String @db.Uuid
+
+  // The user-facing service id — the key of the record returned by the deploy
+  // file's `services` export (e.g. "api"). Unique across the whole PROJECT, not
+  // per source, which is what lets a reference name a service without naming
+  // its source. It doubles as the Marshal service key.
+  serviceId String
+
+  // Set when the service's spec was first successfully applied to Marshal
+  // (the Fly-backed runtime). Marshal apps have deterministic names, so there
+  // is no foreign id to store, only the fact that provisioning happened.
+  provisionedAt DateTime?
+
+  // When this service last STARTED running the tenant's own image, which is what
+  // the Free plan's 24-hour limit is measured from. Set on every successful
+  // deploy, so a redeploy buys another 24 hours.
+  //
+  // NULL MEANS NO LIMIT, not "unknown". Every row that existed before this column
+  // shipped has null here and is grandfathered: the limit applies to deployments
+  // made after it, not retroactively to work whose authors were never told about
+  // a window. The first redeploy writes this and opts that service in, so the
+  // exempt set only ever shrinks. See windowStartedAt in
+  // apps/backend/src/lib/deployments/parking.tsx.
+  //
+  // A column of its own rather than `updatedAt`, which any edit to the row bumps
+  // (a definition sync, a domain change), and rather than the newest Deployment
+  // row, which would make the sweeper's candidate query a join over a table it
+  // otherwise never touches.
+  runningSince DateTime?
+
+  // Set while the service is PARKED: stopped, with the platform's parked page
+  // served in its place on every hostname it holds. See parkService in
+  // apps/marshal/src/services.ts for what parking does to the runtime, and
+  // apps/backend/src/lib/deployments/parking.tsx for what decides it.
+  //
+  // Two columns rather than one enum: `parkedReason` is passed through to Marshal
+  // (which passes it to the parked page, which picks its copy from it) and is
+  // expected to grow values that have nothing to do with plans — a platform
+  // pause, an abuse suspension — while `parkedAt` is what every query filters on.
+  parkedAt     DateTime?
+  parkedReason String?
+
+  // The definition as last synced from the deploy file's `services` export.
+  // `definitionSyncId` is regenerated once per source sync and fenced by the
+  // deploy that follows it, so two CLIs cannot silently combine one checkout's
+  // source with another checkout's stored build settings and env definition.
+  definitionSyncedAt DateTime?
+  definitionSyncId   String?   @db.Uuid
+  // How the service runs: "server" (one instance that suspends when idle, the
+  // only kind that may mount a volume) or "serverless" (scales between the
+  // bounds below, stops on scale-down).
+  type          String @default("serverless")
+  // Whether the service takes public ingress. A property of the SERVICE rather
+  // than of a port: the runtime's proxy serves every declared port on every
+  // address the app holds, so "public 3000, private 5432" is not a thing it can
+  // do, and a per-port flag could only ever misdescribe it.
+  //
+  // A public service must be all-HTTP (raw TCP carries no SNI or Host, so a
+  // shared public address cannot route it) and must declare at least one port.
+  // Both are enforced in code rather than by a CHECK: they are facts about the
+  // runtime we deploy onto, not about what these columns may contain, and are
+  // expected to move — public TCP is a dedicated IPv4 away. See the migration.
+  isPublic      Boolean @default(false)
+  // The ports the container listens on, as a JSON object keyed by port number
+  // with required `{ protocol }` values (see DeploymentPortDefinition). A "tcp" port is
+  // raw and only a private service may declare one.
+  ports         Json   @default("{}")
+  minInstances  Int?
+  maxInstances  Int?
+  // How much memory the container gets, in megabytes. Null = the type's default
+  // (see defaultDeploymentMemoryForType), which is what every service ran at
+  // before compute was configurable — so an existing row needs no backfill and
+  // deploys the machine it already had.
+  //
+  // Stored as a number rather than the "4GB" token the deploy file writes: the
+  // token is an authoring spelling with exactly one canonical form per size, and
+  // a column that stores it would have to be re-validated against that ladder on
+  // every read. A megabyte count off the ladder reads back as "unset".
+  //
+  // CPU is not stored because it is not declared: it is derived from this by the
+  // runtime, which is what keeps every size valid on both a whole-VM "server"
+  // and a "serverless" container.
+  memoryMb      Int?
+  // Where the service's code lives inside the deployment source's upload, relative to the
+  // deploy file. The build CONTEXT is the whole upload (a monorepo service
+  // usually has to reach shared code above its own directory); this only scopes
+  // where build detection starts.
+  rootDirectory String?
+  // The Dockerfile to build from, relative to the root of the uploaded source.
+  // Null = no Dockerfile: the remote builder auto-detects the build with Railpack.
+  dockerfilePath String?
+  // An image, as a canonical fully-qualified reference with an explicit tag or
+  // digest ("docker.io/library/postgres:16"). With no buildCommand it is the
+  // image to RUN and the service is not built at all; with one it is the BASE
+  // the service is built on, and rootDirectory says where in the upload the
+  // build command runs. Mutually exclusive with dockerfilePath — each of them
+  // says what the build starts from — enforced in code alongside the rest of the
+  // definition validation rather than by a CHECK, for the same reason as
+  // isPublic above.
+  //
+  // A TAG here is deliberately not resolved: this is what the author asked for,
+  // and the digest it resolved to belongs to the deployment that pinned it.
+  image String?
+  // A single command line, run through `sh -c` while the image is BUILT. Null =
+  // the base decides the build entirely. Its base is `image`, or
+  // `dockerfilePath`'s Dockerfile (where it becomes a final appended RUN), or —
+  // with neither — the Hexclave base image, which replaces Railpack
+  // auto-detection.
+  //
+  // (The Vercel-era DeploymentService had a buildCommand column too, dropped
+  // when deployments moved to containers. This one is not it: that one was a
+  // framework build setting handed to Vercel, this one is a line of a Dockerfile
+  // Marshal generates.)
+  buildCommand String?
+  // A single command line, run through `sh -c` as the container's process
+  // instead of whatever the image would have started. Null = the image decides.
+  //
+  // Applied at RUN time (the machine's init replaces the image's entrypoint and
+  // command both), never baked into an image — so it causes no build, and a
+  // service that only runs an `image` keeps its build-less deploy while still
+  // being able to say how to start.
+  startCommand String?
+  // Note there is deliberately no dev command here: `devCommand` in the deploy
+  // file's `services` export is consumed locally by `hexclave dev
+  // --service-id`, and the backend never acts on it, so storing it would only
+  // buy a display row in the dashboard at the price of a column that can drift
+  // from the deploy file.
+  //
+  // Array of [env var key, DeploymentEnvVarDefinition] entries (see
+  // @hexclave/shared/dist/deployments). An entry array, rather than a JSON object, preserves
+  // special keys such as `__proto__` through Prisma's JSON serializer:
+  // { value } for plain vars,
+  // { type: "secret", key } for secrets (never their values, and never their
+  // `secret(key, default)` fallbacks — those travel with the deploy request
+  // and are rejected by deploymentEnvVarSchema on every write path),
+  // { type: "connection", value } for service-output references.
+  env Json @default("{}")
+
+  tenancy Tenancy           @relation(fields: [tenancyId], references: [id], onDelete: Cascade)
+  source DeploymentSource @relation(fields: [tenancyId, sourceRowId], references: [tenancyId, id], onDelete: Cascade)
+
+  @@id([tenancyId, id])
+  @@unique([tenancyId, serviceId])
+  @@index([tenancyId, sourceRowId])
+}
+
+model DeploymentVolume {
+  tenancyId String @db.Uuid
+
+  id String @default(uuid()) @db.Uuid
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sourceRowId String @db.Uuid
+
+  // The author-chosen id (the key of `persistentVolumes` in the deploy file),
+  // which names the underlying Fly volume. Unique within the deployment source, which is
+  // what OWNS the disk: a service that stops being declared is torn down, and
+  // its disk survives here for a later deploy to mount again.
+  volumeId String
+  // Provisioned size in whole gigabytes. Grow-only — Fly rejects a shrink, and
+  // shrinking would mean destroying tenant data.
+  sizeGb Int
+
+  // The service currently mounting it, and where. Both null = unattached: the
+  // disk exists (and is still billed) but no service declares it. They are a
+  // pair and are always written together.
+  serviceId String?
+  path      String?
+
+  tenancy Tenancy           @relation(fields: [tenancyId], references: [id], onDelete: Cascade)
+  source DeploymentSource @relation(fields: [tenancyId, sourceRowId], references: [tenancyId, id], onDelete: Cascade)
+
+  @@id([tenancyId, id])
+  @@unique([tenancyId, sourceRowId, volumeId])
+  // One disk, one holder: two services asking to mount the same volume would
+  // ask Fly to attach it to two machines. Project-wide rather than per source,
+  // because service ids are.
+  @@unique([tenancyId, serviceId])
+}
+
+model DeploymentDomain {
+  tenancyId String @db.Uuid
+
+  id String @default(uuid()) @db.Uuid
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Per-TENANCY, not per-service: the deployments runtime holds exactly one
+  // claim per hostname, so two services both holding a row for one hostname
+  // would leave the loser advertising a verified URL that routes to the winner.
+  hostname String
+
+  // What the hostname points at: a service (ids are unique across the project,
+  // so it needs no deployment source to disambiguate) and one of its ports.
+  // Both null = unattached, which is what a domain becomes when its service
+  // stops being declared — the certificate is kept rather than silently
+  // released, and the row waits for someone to re-point or delete it.
+  //
+  // The port is the target service's standard-ports holder — the one that owns
+  // 80/443, which is where a certificate terminates. Stated rather than derived
+  // because a domain names an ENDPOINT, not a machine: a public service may
+  // declare several ports, and this row has to keep saying which one it meant
+  // even after the service changes them.
+  //
+  // Deliberately NOT a foreign key to DeploymentService: a domain OUTLIVES the
+  // service it points at, which is the whole reason it is a table of its own.
+  serviceId String?
+  port      Int?
+
+  isPrimary Boolean @default(false)
+  // Runtime-reported (Marshal) verification state, refreshed whenever the domain is read.
+  verified Boolean @default(false)
+
+  tenancy Tenancy @relation(fields: [tenancyId], references: [id], onDelete: Cascade)
+
+  @@id([tenancyId, id])
+  @@unique([tenancyId, hostname])
+  @@index([tenancyId, serviceId])
+}
+
+enum DeploymentStatus {
+  QUEUED
+  BUILDING
+  DEPLOYING
+  SUCCEEDED
+  FAILED
+  CANCELED
+}
+
+model Deployment {
+  tenancyId String @db.Uuid
+
+  id String @default(uuid()) @db.Uuid
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sourceRowId String @db.Uuid
+
+  // Monotonic per tenancy, so the dashboard and CLI can say "deployment #47"
+  // instead of showing a uuid. Assigned inside the same transaction that
+  // creates the row (see createDeployment), which the unique constraint below
+  // makes safe against two concurrent deploys picking the same number.
+  number Int
+
+  // Free-form descriptor of what triggered the deploy (e.g. "cli").
+  triggeredBy String
+
+  status DeploymentStatus @default(QUEUED)
+  error  String?
+
+  // The runtime's id for this deployment. Null until the runtime has accepted
+  // it.
+  //
+  // Named "build" for historical reasons: when a deployment builds anything, it
+  // builds ONCE — the source tree is uploaded once and every source-built
+  // service's image comes out of one builder machine, so the build and its log
+  // belong to the deployment rather than to any single service. A deployment
+  // whose every service runs an already-built image starts no builder at all and
+  // still has an id here; see hasBuildLogs for whether a log exists.
+  marshalBuildId String?
+
+  // Whether this deployment produced a BUILD LOG, as the runtime reported when
+  // it accepted the deployment. False when every service ran an already-built
+  // image: no builder machine started, so there is no log to offer and the
+  // dashboard must not show an empty one.
+  //
+  // Defaults true because every row written before prebuilt images existed was a
+  // source build, which is exactly what true means.
+  hasBuildLogs Boolean @default(true)
+
+  // What this deploy PACKAGED: `{ file_count, total_bytes, compressed_bytes,
+  // entries: [{ path, bytes }] }` (see DeploymentSourceManifest in
+  // packages/shared/src/deployments). A listing, never contents — the tarball
+  // itself is consumed by the build and deleted, so this is what survives it to
+  // answer "why was my upload this big, and did my .dockerignore work".
+  //
+  // Null for an all-prebuilt deploy (nothing was packaged) and for every row
+  // written before the manifest existed. Capped at MAX_SOURCE_MANIFEST_ENTRIES
+  // files, largest first, so the column stays small on a repository with tens of
+  // thousands of files.
+  sourceManifest Json?
+
+  // The service ids this deploy INTENDED to ship, in dependency order, as a
+  // JSON string array — kept separately from the outcomes below because a
+  // service can fail before it has an outcome at all.
+  plannedServiceIds Json @default("[]")
+
+  // What each service actually did in THIS deploy, as a JSON object keyed by
+  // service id: `{ status, url, revision, error }` (see DeploymentServiceOutcome).
+  // A deployment is the unit of history, so the outcomes live on it rather than
+  // in rows of their own — nothing queries a single service's timeline except
+  // through the deployments of its source.
+  services Json @default("{}")
+
+  // `{ edkBase64, ciphertextBase64 }`, encrypting a JSON string array of the
+  // exact sensitive values injected into this deploy. Build logs are fetched
+  // from the runtime (Marshal) on demand, potentially after a project secret was
+  // rotated or deleted; keeping the encrypted snapshot here lets those
+  // historical logs stay redacted without retaining the old value in ProjectSecret.
+  redactionSecretsEncrypted Json?
+
+  finishedAt DateTime?
+
+  // Set when the client owning this deploy reports that it has stopped working
+  // on it (see the conclude route). A planned service with no outcome normally
+  // reads as "still going" — but a client can fail before reporting anything at
+  // all (packaging, upload, a crash), which leaves nothing to derive a terminal
+  // state from. This column is what says "nothing further is coming"; without it
+  // such a deployment stays queued forever and the dashboard polls it
+  // indefinitely.
+  concludedAt DateTime?
+
+  tenancy Tenancy           @relation(fields: [tenancyId], references: [id], onDelete: Cascade)
+  source DeploymentSource @relation(fields: [tenancyId, sourceRowId], references: [tenancyId, id], onDelete: Cascade)
+
+  @@id([tenancyId, id])
+  @@unique([tenancyId, number])
+  @@index([tenancyId, createdAt(sort: Desc)])
+  @@index([tenancyId, sourceRowId, createdAt(sort: Desc)])
+}
+
+model DeploymentSourceUpload {
+  tenancyId String @db.Uuid
+
+  id String @default(uuid()) @db.Uuid
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // The upload slot id in Marshal's bucket (passed as the spec's source).
+  marshalUploadId String
+  expiresAt       DateTime
+
+  tenancy Tenancy @relation(fields: [tenancyId], references: [id], onDelete: Cascade)
+
+  @@id([tenancyId, id])
+  @@index([expiresAt])
+}
+
+
+// Platform-wide (cross-tenant) switches for the Deployments app.
+//
+// A singleton: one row for the whole Hexclave instance, matching
+// ExternalDbSyncMetadata's shape. Not per-project and not per-tenancy — this is
+// the operator's control over the alpha as a whole, and a per-project override
+// is deliberately not modelled until something needs one.
+//
+// Its own table rather than a column on ExternalDbSyncMetadata: the two features
+// share nothing but the singleton pattern, and a deployments switch living in a
+// table named after the DB-sync pipeline is exactly the confusion an emergency
+// switch must not cause.
+//
+// Every column defaults to today's behaviour, and a MISSING row reads as those
+// defaults (see getDeploymentsPlatformConfig) — so this table needs no backfill
+// and there is no window in which deploys are off because nobody has written to
+// it yet.
+model DeploymentsPlatformConfig {
+  id String @id @default(dbgenerated("gen_random_uuid()"))
+
+  singleton BooleanTrue @unique @default(TRUE)
+
+  // The emergency fusebox. False = no NEW deployment may be created anywhere on
+  // this instance: the deploy and upload routes refuse with a 503. Deliberately
+  // narrow — deployments already in flight run to completion, status and logs
+  // stay readable, and tearing services down keeps working, because an operator
+  // flipping this during an incident needs those more than ever.
+  deploymentsEnabled Boolean @default(true)
+
+  // Whether the Free plan's time limit is enforced at all. Default TRUE: the limit
+  // is part of what the Free plan IS, so an instance that has never been
+  // configured enforces it. An operator can still pause it from the Deploy Admin
+  // page — which is the switch to reach for if parking ever misbehaves, because
+  // turning it off stops new parks immediately (already-parked services stay
+  // parked until their projects redeploy or upgrade).
+  //
+  // Note what this default means on the deploy that ships it: every Free-plan
+  // project whose services last deployed more than the window ago is parked by
+  // the first sweep, within ten minutes. That is the intended behaviour, but it
+  // is not a quiet rollout.
+  freePlanParkingEnabled Boolean @default(true)
+
+  // How long a Free-plan project's services run after each deploy before they are
+  // parked. Configurable because the right number is a pricing decision that will
+  // move, and because an operator handling an incident needs to be able to widen
+  // it without a deploy.
+  freePlanParkAfterHours Int @default(24)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+
+// ─── Workflows ──────────────────────────────────────────────────────────────
+//
+// Durable, event-triggered workflows (Hexclave Workflows v1). All tables are
+// fully multi-tenant and available to every project: the alpha-stage
+// `workflows-alpha` app controls dashboard visibility only, and — as with every
+// other app — the API is not gated on it being installed.
+//
+// The engine is tick-driven like the email queue: a cron route claims due
+// work with FOR UPDATE SKIP LOCKED, invokes sandboxes (js-execution), and
+// records step results. See apps/backend/src/lib/workflows/.
+
+model WorkflowDefinition {
+  tenancyId String @db.Uuid
+  tenancy   Tenancy @relation(fields: [tenancyId], references: [id], onDelete: Cascade)
+
+  // User-chosen slug (e.g. "welcome-drip"). Deliberately not a uuid: it is
+  // the stable business identity of the workflow across versions, and the
+  // handle used by the management API (cancelRuns({ workflow: ... })).
+  workflowId String
+
+  displayName String
+
+  // Denormalized copy of the highest WorkflowVersion.version. The sync route
+  // is the only writer of versions, and it updates this in the same
+  // transaction that inserts the version row.
+  latestVersion Int
+
+  // Pause state. While `pausedAt` is set the workflow accepts no new runs:
+  // matching events are still consumed from the outbox, they just do not
+  // dispatch to this definition. In-flight runs are untouched — pausing
+  // stops the intake, it does not halt work already underway.
+  //
+  // The gate is evaluated when the engine processes an event, not against the
+  // event's own timestamp, so an event enqueued moments before a resume can
+  // still dispatch if no tick reached it while the workflow was paused. That
+  // boundary is deliberately approximate.
+  pausedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@id([tenancyId, workflowId])
+}
+
+model WorkflowVersion {
+  tenancyId  String @db.Uuid
+  tenancy    Tenancy @relation(fields: [tenancyId], references: [id], onDelete: Cascade)
+  workflowId String
+  // Platform-assigned, monotonically increasing per workflow per tenancy
+  // (v1, v2, ...). Never author-declared.
+  version Int
+
+  // The raw source string as authored in the dashboard editor. The version
+  // hash is over (source, runtimeEnvVersion): a version is minted whenever
+  // either changes.
+  source     String
+  sourceHash String
+
+  // esbuild output of (runtime shim + user source), bundled at sync time and
+  // stored per version so that pinned runs execute byte-identical code
+  // forever. Only the pinned stdlib (date-fns) stays an external import,
+  // installed into the sandbox via nodeModules at the exact version recorded
+  // in runtimeEnvVersion's pin table.
+  compiledBundle String
+
+  // Version tag of the platform-provided runtime environment (runtime shim +
+  // stdlib pins) this version was synced against. Pinned runs execute
+  // against their recorded env; env upgrades apply to new versions only.
+  // See WORKFLOWS_RUNTIME_ENVS in apps/backend/src/lib/workflows/runtime-env.tsx.
+  runtimeEnvVersion String
+
+  // WorkflowManifest (packages/shared/src/interface/workflows.ts), extracted
+  // by executing the compiled bundle in manifest mode at sync time: triggers,
+  // hasRunKey, onConflict, usesStdlib. This is what event dispatch matches
+  // against, so trigger declarations are data here, never re-evaluated code.
+  manifest Json
+
+  createdAt DateTime @default(now())
+
+  @@id([tenancyId, workflowId, version])
+}
+
+enum WorkflowRunState {
+  QUEUED
+  RUNNING
+  SLEEPING
+  COMPLETED
+  FAILED
+  CANCELED
+}
+
+// Which error channel a failure belongs to. USER failures (handler/step code
+// threw) surface in run history with their message; PLATFORM failures
+// (sandbox provisioning, engine bugs) are reported to our monitoring and
+// surface to users only as a generic platform error.
+enum WorkflowRunFailureKind {
+  USER
+  PLATFORM
+}
+
+model WorkflowRun {
+  tenancyId String @db.Uuid
+  tenancy   Tenancy @relation(fields: [tenancyId], references: [id], onDelete: Cascade)
+  // Platform UUID for history: runKeys recur over time, UUIDs never.
+  id String @default(uuid()) @db.Uuid
+
+  workflowId String
+  // The version this run is pinned to. Set at creation to the then-latest
+  // version; changed only by an explicit upgradeRuns action.
+  version Int
+
+  // Business key derived from the trigger event at run creation (before any
+  // execution). Unique per workflow among ACTIVE runs — see the isActive
+  // generated column below. Null for keyless runs. Capped at 512 chars at
+  // creation time to keep the unique index well below btree limits.
+  runKey String?
+
+  state WorkflowRunState @default(QUEUED)
+
+  // Generated column (see migration): TRUE while state is one of
+  // QUEUED/RUNNING/SLEEPING, NULL otherwise. Exists solely so the
+  // active-run-per-runKey uniqueness below can be an ordinary unique index
+  // (NULLs never collide), the same trick as Tenancy.hasNoOrganization.
+  // NOTE: Prisma only applies dbgenerated() as a DEFAULT; the migration
+  // hand-writes the actual GENERATED ALWAYS AS ... STORED column, and this
+  // declaration must be kept in sync with it. The string below must be the
+  // expression as Postgres *renders it back*, not as the migration writes it:
+  // Postgres parses the expression and re-deparses it, so `IN (...)` becomes
+  // `= ANY (ARRAY[...])`, literals gain explicit casts, and it is pretty-printed
+  // with a leading newline. `prisma migrate diff` (the check in CI) compares
+  // these strings literally, so the source form drifts forever. Get the exact
+  // text with:
+  //   SELECT pg_get_expr(d.adbin, d.adrelid) FROM pg_attrdef d
+  //     JOIN pg_attribute a ON a.attrelid = d.adrelid AND a.attnum = d.adnum
+  //     WHERE d.adrelid = '"WorkflowRun"'::regclass AND a.attname = 'isActive';
+  // Dropping the dbgenerated() entirely does not work either — diff then reports
+  // the default changing to None. Same deal as the EmailOutbox generated columns.
+  isActive Boolean? @default(dbgenerated("\nCASE\n    WHEN (state = ANY (ARRAY['QUEUED'::\"WorkflowRunState\", 'RUNNING'::\"WorkflowRunState\", 'SLEEPING'::\"WorkflowRunState\"])) THEN true\n    ELSE NULL::boolean\nEND"))
+
+  // The id of the WorkflowEvent that triggered this run. Not a foreign key
+  // on purpose: events are retention-pruned independently of runs, and the
+  // id must survive as a value (it identifies the trigger event).
+  // triggerType/triggerPayload are denormalized snapshots because the
+  // handler replays against them on every invocation.
+  triggerEventId String? @db.Uuid
+  triggerType    String
+  // Envelope { ts_millis: number, data: <event payload> } — ts_millis is the
+  // trigger event's scheduledAt, which becomes event.ts in the handler.
+  triggerPayload Json
+
+  // The step the run is currently parked on: the sleep step while SLEEPING,
+  // the step being retried while QUEUED with attempts > 0, the last known
+  // executing step while RUNNING. Null at creation and after each recorded
+  // step. Used by upgrade divergence decisions (a sleeping run can only
+  // transfer to code that reaches the same sleep) and the dashboard.
+  currentStepKey String?
+
+  // When the run next needs engine attention: QUEUED = ready (or waiting out
+  // a retry backoff), SLEEPING = durable timer. Null while RUNNING (leased).
+  wakeAt DateTime?
+  // Lease for crash recovery: a RUNNING run whose lease expired is re-claimed
+  // by a later tick. Re-claiming re-executes from the last committed step, so
+  // step execution is at-least-once (a crashed worker may re-run a step).
+  leaseUntil DateTime?
+  // Fencing token, rotated on every claim: post-invocation transitions
+  // require the claimant's token, so a stale worker that lost its lease
+  // (paused mid-await past expiry) can no longer clobber the new claimant's
+  // state. Cancel/upgrade/retry deliberately do NOT check it — they act on
+  // state, and the engine's guarded transitions observe the result.
+  leaseToken String? @db.Uuid
+
+  // Attempt counter for the step currently being executed; reset to 0
+  // whenever a step result is recorded. 4 attempts max (1 + 3 retries).
+  currentStepAttempt Int @default(0)
+
+  // How many times an operator has manually retried this run from its failed
+  // step. Manual retry grants a fresh attempt budget (currentStepAttempt goes
+  // back to 0), so without this the re-executed attempts would reuse attempt
+  // numbers that already exist for the same step and collide with the
+  // WorkflowStepAttempt primary key — silently discarding the new history via
+  // its skipDuplicates insert. Bumping the epoch keeps every execution's
+  // attempts as distinct rows, so a retried run shows what actually happened
+  // rather than only its original failure.
+  retryEpoch Int @default(0)
+
+  // Running total of recorded step result sizes, to enforce the 4 MiB
+  // total-memoized-state-per-run limit without summing on every step.
+  memoTotalBytes Int @default(0)
+
+  failureKind  WorkflowRunFailureKind?
+  errorSummary String?
+
+  // Machine-readable diagnostic from the most recent skipped upgradeRuns
+  // attempt (expected vs found step graph). Cleared on successful upgrade.
+  lastUpgradeDivergence Json?
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  completedAt DateTime?
+
+  stepResults  WorkflowStepResult[]
+  stepAttempts WorkflowStepAttempt[]
+
+  @@id([tenancyId, id])
+  // runKey/onConflict enforcement: at most one ACTIVE run per (workflow,
+  // runKey). isActive is NULL for terminal runs and runKey is NULL for
+  // keyless runs, so neither ever conflicts.
+  @@unique([tenancyId, workflowId, runKey, isActive], map: "WorkflowRun_active_run_key")
+  // Run-list queries (dashboard/API): filter by workflow + state, newest first.
+  @@index([tenancyId, workflowId, state, createdAt(sort: Desc)], map: "WorkflowRun_list_idx")
+  // Engine due-work scan (cross-tenancy): QUEUED/SLEEPING by wakeAt, plus
+  // expired-lease recovery on RUNNING by leaseUntil.
+  @@index([state, wakeAt], map: "WorkflowRun_due_idx")
+  @@index([state, leaseUntil], map: "WorkflowRun_lease_idx")
+  // Version fan-out ("214 runs on v7, 3 on v8") per workflow.
+  @@index([tenancyId, workflowId, version, state], map: "WorkflowRun_version_idx")
+}
+
+enum WorkflowStepKind {
+  RUN
+  SLEEP
+}
+
+model WorkflowStepResult {
+  tenancyId String @db.Uuid
+  runId     String @db.Uuid
+
+  // The memoization key: the user-written step id, suffixed with "#<n>" by
+  // the runtime when the same id executes more than once (loop counter).
+  // CONTRACT: a step key names a recorded fact; matching is by key only,
+  // order-independent.
+  stepKey String
+
+  // The user-written step id without the loop counter suffix (for display).
+  stepId String
+  kind   WorkflowStepKind
+
+  // RUN: the JSON return value of the step callback (<= 1 MiB, enforced with
+  // an explicit error). SLEEP: { until: <ISO timestamp> }.
+  result          Json?
+  resultSizeBytes Int
+
+  // How many attempts it took to record this fact (1 = first try).
+  attempts Int
+  // Which workflow version's code executed this step (observability; differs
+  // from the run's current version after an upgrade).
+  executedAtVersion Int
+  elapsedMs         Int?
+
+  createdAt DateTime @default(now())
+
+  run WorkflowRun @relation(fields: [tenancyId, runId], references: [tenancyId, id], onDelete: Cascade)
+
+  @@id([tenancyId, runId, stepKey])
+}
+
+enum WorkflowStepAttemptOutcome {
+  SUCCEEDED
+  FAILED
+}
+
+// One row per sandbox invocation attempt of a step, for observability
+// (sandbox logs + error history per attempt). Kept separate from
+// WorkflowStepResult because failed attempts are history, not facts.
+model WorkflowStepAttempt {
+  tenancyId String @db.Uuid
+  runId     String @db.Uuid
+  stepKey   String
+  // WorkflowRun.retryEpoch at the time of this attempt. Part of the key
+  // because a manual retry restarts attempt numbering at 1 for the same step.
+  retryEpoch Int @default(0)
+  attempt    Int
+
+  stepId  String
+  outcome WorkflowStepAttemptOutcome
+  // { name, message, stack } of the user-code error if FAILED with
+  // failureKind USER; a generic marker for PLATFORM failures.
+  error       Json?
+  failureKind WorkflowRunFailureKind?
+  // console output captured inside the sandbox by the runtime shim, capped
+  // at 64 KiB per attempt.
+  logs String?
+
+  startedAt  DateTime
+  finishedAt DateTime
+  createdAt  DateTime @default(now())
+
+  run WorkflowRun @relation(fields: [tenancyId, runId], references: [tenancyId, id], onDelete: Cascade)
+
+  @@id([tenancyId, runId, stepKey, retryEpoch, attempt])
+}
+
+// The workflow event outbox. Platform events are inserted transactionally
+// with the entity mutation at the webhook call sites (at-least-once from our
+// own tables); custom events via workflows.send(); schedule occurrences are
+// materialized by the engine; lifecycle events (workflow.run.*) are inserted
+// on run state transitions.
+model WorkflowEvent {
+  tenancyId String @db.Uuid
+  tenancy   Tenancy @relation(fields: [tenancyId], references: [id], onDelete: Cascade)
+  id        String @default(uuid()) @db.Uuid
+
+  // Wire type: platform events are unprefixed ("user.created"), custom
+  // events are always "custom.*", lifecycle events are "workflow.run.*",
+  // schedule occurrences are "schedule".
+  type    String
+  payload Json
+
+  // For schedule occurrences: the cron tick's nominal time (may be in the
+  // past when catching up after downtime). Everything else: creation time.
+  // The outbox processes events in ascending scheduledAt order, which is
+  // what guarantees delayed-never-skipped schedule catch-up.
+  scheduledAt DateTime  @default(now())
+  processedAt DateTime?
+  // Failed dispatches back off so one poison event cannot monopolize the
+  // oldest outbox batch and starve unrelated tenants forever.
+  processingAttempts Int      @default(0)
+  retryAt            DateTime @default(now())
+
+  createdAt DateTime @default(now())
+
+  @@id([tenancyId, id])
+  // Outbox scan: unprocessed events in scheduledAt order. processedAt is the
+  // leading column so the scan stays cheap as processed events accumulate
+  // (IS NULL rows are contiguous in the index).
+  @@index([processedAt, retryAt, scheduledAt], map: "WorkflowEvent_outbox_idx")
+  // Retention pruning + per-tenancy event views.
+  @@index([tenancyId, createdAt], map: "WorkflowEvent_tenancy_created_idx")
+}
+
+// Cursor for schedule() trigger materialization. One row per schedule
+// trigger per workflow; scheduleKey is "<cron>|<timezone>" so editing a
+// schedule starts a fresh cursor (no retroactive catch-up of the new
+// expression).
+model WorkflowScheduleCursor {
+  tenancyId   String @db.Uuid
+  tenancy     Tenancy @relation(fields: [tenancyId], references: [id], onDelete: Cascade)
+  workflowId  String
+  scheduleKey String
+
+  lastMaterializedAt DateTime
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@id([tenancyId, workflowId, scheduleKey])
+}

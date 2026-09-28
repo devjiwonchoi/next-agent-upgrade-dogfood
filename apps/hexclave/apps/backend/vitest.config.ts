@@ -1,0 +1,26 @@
+import { resolve } from 'path'
+import { loadEnv } from 'vite'
+import { defineConfig, mergeConfig } from 'vitest/config'
+import sharedConfig from '../../vitest.shared'
+
+export default mergeConfig(
+  sharedConfig,
+  defineConfig({
+    test: {
+      testTimeout: 60000,
+      hookTimeout: 60000,
+      env: {
+        ...loadEnv('', process.cwd(), ''),
+        ...loadEnv('development', process.cwd(), ''),
+      },
+      setupFiles: ['./vitest.setup.ts'],
+    },
+    resolve: {
+      alias: {
+        '@': resolve(__dirname, './src')
+      }
+    },
+    envDir: __dirname,
+    envPrefix: ['HEXCLAVE_', 'STACK_'],
+  })
+)

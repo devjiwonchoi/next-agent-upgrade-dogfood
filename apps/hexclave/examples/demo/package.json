@@ -1,0 +1,37 @@
+{
+  "name": "@hexclave/example-demo-app",
+  "version": "1.0.124",
+  "repository": "https://github.com/hexclave/hexclave",
+  "description": "",
+  "private": true,
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "clean": "rimraf .next && rimraf node_modules",
+    "dev": "NEXT_PUBLIC_HEXCLAVE_LOCAL_DASHBOARD_PORT=${NEXT_PUBLIC_HEXCLAVE_PORT_PREFIX:-81}42 node scripts/dev-with-retry.mjs",
+    "dev:inner": "next dev --turbopack --port ${NEXT_PUBLIC_HEXCLAVE_PORT_PREFIX:-81}03",
+    "build": "next build",
+    "start": "next start --port ${NEXT_PUBLIC_HEXCLAVE_PORT_PREFIX:-81}03",
+    "lint": "next lint",
+    "analyze": "ANALYZE=true pnpm build"
+  },
+  "dependencies": {
+    "@hexclave/js": "workspace:*",
+    "@hexclave/react": "workspace:*",
+    "@hexclave/next": "workspace:*",
+    "@hexclave/shared": "workspace:*",
+    "@hexclave/ui": "workspace:*",
+    "next": "15.5.19",
+    "next-themes": "^0.4.3",
+    "react": "19.0.1",
+    "react-dom": "19.0.1"
+  },
+  "devDependencies": {
+    "@types/react": "19.0.12",
+    "@types/react-dom": "19.0.4",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.47",
+    "rimraf": "^5.0.10",
+    "tailwindcss": "^3.4.14"
+  },
+  "packageManager": "pnpm@11.5.0"
+}

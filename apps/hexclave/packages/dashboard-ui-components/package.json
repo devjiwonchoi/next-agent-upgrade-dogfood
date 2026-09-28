@@ -1,0 +1,71 @@
+{
+  "name": "@hexclave/dashboard-ui-components",
+  "version": "1.0.124",
+  "repository": "https://github.com/hexclave/hexclave",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "sideEffects": false,
+  "scripts": {
+    "build": "rimraf dist && tsdown && pnpm run build-iife && pnpm run copy-iife",
+    "typecheck": "tsc --noEmit",
+    "clean": "rimraf dist && rimraf node_modules",
+    "build-iife": "tsx scripts/build-iife.ts",
+    "copy-iife": "tsx scripts/copy-iife.ts",
+    "lint": "eslint --ext .tsx,.ts ."
+  },
+  "files": [
+    "README.md",
+    "dist",
+    "src",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": {
+        "default": "./dist/esm/index.js"
+      },
+      "require": {
+        "default": "./dist/index.js"
+      }
+    }
+  },
+  "peerDependencies": {
+    "@types/react": ">=19.0.0",
+    "@types/react-dom": ">=19.0.0",
+    "react": ">=19.0.0",
+    "react-dom": ">=19.0.0",
+    "recharts": ">=2.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@types/react": {
+      "optional": true
+    },
+    "@types/react-dom": {
+      "optional": true
+    },
+    "recharts": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "@phosphor-icons/react": "^2.1.7",
+    "@radix-ui/react-slot": "^1.1.0",
+    "@hexclave/shared": "workspace:*",
+    "@hexclave/ui": "workspace:*",
+    "@tanstack/react-table": "^8.21.3",
+    "@tanstack/react-virtual": "^3.13.0",
+    "class-variance-authority": "^0.7.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "esbuild": "^0.24.0",
+    "react": "^19.0.1",
+    "react-dom": "^19.0.1",
+    "recharts": "^2.14.1",
+    "rimraf": "^5.0.10"
+  },
+  "packageManager": "pnpm@11.5.0"
+}

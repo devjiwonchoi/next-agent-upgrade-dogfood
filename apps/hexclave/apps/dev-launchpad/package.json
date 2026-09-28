@@ -1,0 +1,14 @@
+{
+  "name": "@hexclave/dev-launchpad",
+  "version": "1.0.124",
+  "repository": "https://github.com/hexclave/hexclave",
+  "private": true,
+  "scripts": {
+    "dev": "node scripts/write-env-config.js && serve -p ${NEXT_PUBLIC_HEXCLAVE_PORT_PREFIX:-81}00 -s public",
+    "clean": "rimraf node_modules"
+  },
+  "dependencies": {
+    "serve": "^14.2.4"
+  },
+  "packageManager": "pnpm@11.5.0"
+}

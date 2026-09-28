@@ -1,0 +1,134 @@
+*.untracked
+*.untracked.*
+node-compile-cache/
+.envrc
+
+*.heapsnapshot
+
+debug.log
+turbo.log
+
+*.cpuprofile
+
+
+.pnpm-store
+
+
+.vercel
+.output
+.nitro
+
+# https://stackoverflow.com/questions/76510164/can-i-safely-delete-vite-config-ts-timestamp-files
+vite.config.ts.timestamp-*
+
+# Misc
+.DS_Store
+.eslintcache
+.env.local
+.env.*.local
+docker/local-emulator/.env.development
+scratch/
+
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+firebase-debug.log
+ui-debug.log
+.pnpm-debug.log
+.husky
+tmp
+tsx-0
+
+vitest.config.ts.timestamp-*
+tsdown.config.bundled_*
+
+# Dependencies
+node_modules
+
+# Build dirs
+.next
+build
+dist
+
+# Generated files
+.docusaurus
+.cache-loader
+**.tsbuildinfo
+implementation.generated.ts
+
+.xata*
+
+# VS
+/.vs/slnx.sqlite-journal
+/.vs/slnx.sqlite
+/.vs
+.vscode/generated*
+
+# Jetbrains
+.idea
+
+# GitHub Actions runner
+/actions-runner
+/_work
+
+# DB
+dev.db*
+packages/adapter-prisma/prisma/dev.db
+packages/adapter-prisma/prisma/migrations
+db.sqlite
+packages/adapter-supabase/supabase/.branches
+packages/adapter-drizzle/.drizzle
+
+# Tests
+coverage
+dynamodblocal-bin
+firestore-debug.log
+test.schema.gql
+test-results
+playwright-report
+blob-report
+playwright/.cache
+
+
+# Turborepo
+.turbo
+
+
+# Core
+packages/core/src/providers/oauth-types.ts
+packages/core/lib
+packages/core/providers
+
+# Next.js
+next-env.d.ts
+
+# SvelteKit
+packages/frameworks-sveltekit/index.*
+packages/frameworks-sveltekit/client.*
+packages/frameworks-sveltekit/.svelte-kit
+packages/frameworks-sveltekit/package
+packages/frameworks-sveltekit/vite.config.js.timestamp-*
+packages/frameworks-sveltekit/vite.config.ts.timestamp-*
+
+## Drizzle migration folder
+.drizzle
+
+# Sentry Config File
+.sentryclirc
+
+# Python
+__pycache__/
+.venv/
+
+# Generated packages
+packages/js/*
+packages/react/*
+packages/next/*
+packages/tanstack-start/*
+!packages/js/package.json
+!packages/react/package.json
+!packages/next/package.json
+!packages/tanstack-start/package.json
+
+# claude code
+.claude/scheduled_tasks.lock

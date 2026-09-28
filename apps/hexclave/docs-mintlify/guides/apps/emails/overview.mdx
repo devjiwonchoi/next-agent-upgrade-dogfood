@@ -1,0 +1,124 @@
+---
+title: "Emails"
+description: "Send branded transactional and marketing email - rendering, delivery, and tracking handled for you"
+sidebarTitle: "Overview"
+---
+
+<Visibility for="agents">
+<Note>
+  **For agents/LLMs:** This is a high-level *marketing* overview of the Emails app, not an implementation reference. To actually build with email, use [Setup](/guides/getting-started/setup) and the [Emails guide](./guide) (sending, templates, themes, delivery, and server configuration).
+</Note>
+</Visibility>
+
+import { EmailPreviewSkeleton, EmailTemplatesSkeleton, DeliveryStatsSkeleton } from "/snippets/skeletons/email-skeletons.jsx";
+
+The Emails app covers Hexclave's built-in mail (verification, password resets, receipts) and your own transactional or marketing sends — templates, themes, scheduling, unsubscribes, and delivery tracking included. Below are the questions developers actually ask, and the honest answers.
+
+## Can I send an email from my backend?
+
+Yes. One call from your server, addressed to specific users or everyone in your project. No SMTP wiring, no render step to manage.
+
+```typescript
+await hexclaveServerApp.sendEmail({
+  userIds: ["user-id"],
+  subject: "Welcome aboard!",
+  html: "<h1>Welcome!</h1><p>Thanks for joining us.</p>",
+});
+```
+
+<EmailPreviewSkeleton />
+
+Send raw HTML, a template with variables, or a draft you composed in the dashboard. And failures are never silent - `sendEmail` throws on error with a stable `errorCode` (like `REQUIRES_CUSTOM_EMAIL_SERVER` or `USER_ID_DOES_NOT_EXIST`) so you can handle exactly the cases you care about.
+
+## Can I use my own templates?
+
+Yes. Templates are [React Email](https://react.email) components in TSX, with typed variables validated at render time and a live preview in the dashboard editor.
+
+```tsx
+export function EmailTemplate({ user, variables }: Props<typeof variablesSchema.infer>) {
+  return (
+    <Container>
+      <Subject value={`New feature: ${variables.featureName}`} />
+      <NotificationCategory value="Transactional" />
+      <p>Hi {user.displayName}, check out {variables.featureName}!</p>
+    </Container>
+  );
+}
+```
+
+<EmailTemplatesSkeleton />
+
+Hexclave also ships ready-made templates for the common flows - email verification, password reset, magic link, team invitations, and payment receipts - wired up automatically and customizable from the dashboard.
+
+## Can I match my brand?
+
+Yes. Themes wrap every email in a consistent layout - header, footer, logo, background. Use the built-in Light, Dark, and Colorful themes, or write your own as a TSX component:
+
+```tsx
+import { ThemeProps, ProjectLogo } from "@hexclave/emails";
+
+export function EmailTheme({ children, unsubscribeLink, projectLogos }: ThemeProps) {
+  return (
+    <>
+      <ProjectLogo data={projectLogos} mode="light" />
+      {children}
+      {unsubscribeLink && <a href={unsubscribeLink}>Unsubscribe</a>}
+    </>
+  );
+}
+```
+
+Set a project default, override per-email with `themeId`, or send with no theme at all. See [Templates & themes](./templates-and-themes) for the full theme API and built-in themes.
+
+## Can I respect unsubscribes and preferences?
+
+Yes - and it's automatic. Every email is **Transactional** (always delivered) or **Marketing** (users can opt out). Mark the category when you send, and Hexclave skips users who've unsubscribed and appends an unsubscribe link to marketing mail for you.
+
+```typescript
+await hexclaveServerApp.sendEmail({
+  userIds: ["user-id"],
+  subject: "Product updates",
+  html: "<p>Check out what's new!</p>",
+  notificationCategoryName: "Marketing",
+});
+```
+
+## Can I use my own email provider?
+
+Yes. Connect **custom SMTP**, plug in **Resend** with an API key, or let Hexclave run a **Managed** domain — you add the DNS records from onboarding; Hexclave handles signing and deliverability. Your built-in auth emails - verification, password resets, magic links - already work on Hexclave's **shared** development server out of the box; connect one of the custom providers when you're ready to send your own email and ship to production. Custom SMTP, Resend, and Managed can only be configured in the [cloud dashboard](https://app.hexclave.com). A [development environment](/guides/going-further/local-vs-cloud-dashboard) is limited to the shared server.
+
+## Can I schedule and send in bulk?
+
+Yes. Pass `scheduledAt` to send later, and `allUsers: true` to reach your whole project. Delivery runs through an async pipeline that respects your sending capacity, so large sends don't tank your reputation.
+
+```typescript
+await hexclaveServerApp.sendEmail({
+  allUsers: true,
+  templateId: "product-update",
+  subject: "We just shipped a big update",
+  scheduledAt: new Date("2027-01-01T00:00:00Z"),
+});
+```
+
+## Can I see what happened after I hit send?
+
+Yes. Every email's status is tracked - sent, bounced, marked as spam - across hourly, daily, weekly, and monthly windows, in the dashboard and from code.
+
+<DeliveryStatsSkeleton />
+
+```typescript
+const info = await hexclaveServerApp.getEmailDeliveryStats();
+// info.stats.day.sent, info.stats.day.bounced, ...
+```
+
+## Can I compose without writing code?
+
+Yes. The dashboard has a full draft editor with live preview, theme selection, a recipient picker, and scheduling. You can then either send the draft from the dashboard or programmatically using the `draftId`. See [Drafts](./drafts).
+
+## Start here
+
+1. [Set up Hexclave](/guides/getting-started/setup), then enable **Emails** in the dashboard.
+2. Connect an email server under **Emails → Email Settings** (SMTP, Resend, or Managed) - the shared server already powers your auth emails in development.
+3. Call `hexclaveServerApp.sendEmail(...)` from your backend.
+
+Ready for a start-to-finish walkthrough — server setup, templates, sending, and delivery? Read the [Emails guide](./guide).

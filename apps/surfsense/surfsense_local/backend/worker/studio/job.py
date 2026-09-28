@@ -1,0 +1,150 @@
+import logging
+import time
+
+import httpx
+from sqlalchemy.orm import Session
+
+from modules.artifacts.formats import FORMATS_BY_KEY
+from modules.artifacts.models import Artifact
+from modules.documents.models import Document, DocumentStatus
+from modules.llm.model_type import ModelType
+from modules.llm.providers.audiocpp.memory import NotEnoughMemoryError
+from modules.llm.providers.openai_compatible import NonRetryableImageError
+from modules.llm.providers.protocols import TextToSpeech
+from modules.llm.resolution import (
+    ModelResolutionError,
+    ResolvedGeneration,
+    ResolvedImageGeneration,
+    resolve_generation,
+    resolve_image_generation,
+    resolve_text_to_speech,
+)
+from shared.config import get_storage_settings
+from shared.db import create_db_engine, create_session_factory
+from worker.jobs import JobCancelledError, begin_job, finish_job, raise_if_cancelled
+from worker.notify import notify_artifact_updates
+from worker.studio import job_router
+from worker.studio.shared import cancellation, gather, persist
+
+logger = logging.getLogger(__name__)
+
+MESSAGE_CHARS = 500
+
+
+class NoModelSelectedError(RuntimeError):
+    """No model is chosen for this format's role, so the job cannot run."""
+
+
+def run(artifact_id: int) -> None:
+    """Take one artifact from pending to ready, or to failed with a reason."""
+    # An engine per job, as ingestion does — tests repoint the DB path per case.
+    engine = create_db_engine(get_storage_settings().database_path)
+    try:
+        with create_session_factory(engine)() as session:
+            artifact = session.get(Artifact, artifact_id)
+            if artifact is None:
+                logger.info("artifact %s was deleted before generation", artifact_id)
+                return
+
+            _generate(session, artifact)
+    finally:
+        engine.dispose()
+
+
+def _generate(session: Session, artifact: Artifact) -> None:
+    document = artifact.document
+    started = time.monotonic()
+    logger.info("studio: artifact %s format=%s starting", artifact.id, artifact.format)
+    if not begin_job(session, document):
+        return
+    notify_artifact_updates(artifact)
+
+    try:
+        meta = artifact.artifact_metadata or {}
+        sources = gather.gather(session, meta.get("source_document_ids", []))
+        prompt = meta.get("prompt")
+        logger.info(
+            "studio: artifact %s gathered %s sources (%s chars)",
+            artifact.id,
+            len(sources),
+            sum(len(source.content) for source in sources),
+        )
+        kind = job_router.Kind(artifact.format)
+        fmt = FORMATS_BY_KEY[kind]
+        models = [
+            _choose_model(session, model_type)
+            for model_type in fmt.requires_model_types
+        ]
+        # Options were checked at job creation; only formats that take them get them.
+        extras = [meta.get("options")] if fmt.validate_options else []
+        # Generation runs for minutes; the write lock must not be held across it.
+        session.commit()
+        raise_if_cancelled(session, document)
+
+        # A cancel hangs up on a model mid-reply; other stages still finish first.
+        with cancellation.watching(lambda: raise_if_cancelled(session, document)):
+            built = job_router.pipeline_for(kind)(*models, sources, prompt, *extras)
+        raise_if_cancelled(session, document)
+
+        logger.info(
+            "studio: artifact %s render done in %.1fs; persisting",
+            artifact.id,
+            time.monotonic() - started,
+        )
+        persist.persist(session, artifact, document, built)
+
+        if not finish_job(session, document, DocumentStatus.READY):
+            return
+        notify_artifact_updates(artifact)
+        logger.info(
+            "studio: artifact %s ready in %.1fs",
+            artifact.id,
+            time.monotonic() - started,
+        )
+    except JobCancelledError:
+        session.rollback()
+        logger.info(
+            "studio: artifact %s cancelled after %.1fs",
+            artifact.id,
+            time.monotonic() - started,
+        )
+    except Exception as failure:
+        session.rollback()
+        document = session.get(Document, artifact.document_id)
+        if document is None or document.status is DocumentStatus.CANCELLED:
+            return
+        if not finish_job(session, document, DocumentStatus.FAILED, _reason(failure)):
+            return
+        notify_artifact_updates(artifact)
+        logger.exception(
+            "studio: artifact %s failed after %.1fs: %s",
+            artifact.id,
+            time.monotonic() - started,
+            document.error_message,
+        )
+        # A retry would repeat minutes of drafting and fail the same way.
+        if isinstance(failure, NonRetryableImageError | NotEnoughMemoryError):
+            return
+        raise  # Huey retries; a later success clears the message.
+
+
+def _reason(failure: Exception) -> str:
+    """The one line the user reads in the tooltip; the traceback goes to the log."""
+    if isinstance(failure, httpx.HTTPError):
+        return f"The model could not be reached: {failure}"[:MESSAGE_CHARS]
+    first_line = str(failure).strip().splitlines()[:1]
+    return (first_line[0] if first_line else type(failure).__name__)[:MESSAGE_CHARS]
+
+
+def _choose_model(
+    session: Session, model_type: ModelType
+) -> ResolvedGeneration | ResolvedImageGeneration | TextToSpeech:
+    """The model the user selected for one of the types a format declares."""
+    try:
+        if model_type is ModelType.IMAGE_GEN:
+            return resolve_image_generation(session)
+        if model_type is ModelType.AUDIO_GEN:
+            return resolve_text_to_speech(session)
+        return resolve_generation(session)
+    except ModelResolutionError as error:
+        raise NoModelSelectedError(str(error)) from error

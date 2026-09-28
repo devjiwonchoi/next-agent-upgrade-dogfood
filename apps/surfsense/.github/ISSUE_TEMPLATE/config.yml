@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Discord
+    url: https://discord.gg/ejRNvftDp9
+    about: Questions and setup help
+  - name: Discussions
+    url: https://github.com/MODSetter/SurfSense/discussions
+    about: Open-ended conversation
+  - name: Security
+    url: https://github.com/MODSetter/SurfSense/security/advisories/new
+    about: Private vulnerability report

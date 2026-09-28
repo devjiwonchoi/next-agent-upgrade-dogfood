@@ -1,0 +1,212 @@
+---
+title: "Welcome"
+description: "Hexclave documentation for setup, components, SDK usage, and REST APIs."
+sidebarTitle: "Overview"
+---
+
+
+import { generatedSetupPromptText } from "/snippets/home-prompt-island.jsx";
+import { hexclaveAgentRemindersText } from "/snippets/hexclave-agent-reminders.jsx";
+
+export const SectionLink = ({ href, children }) => (
+  <a href={href} className="text-base font-semibold text-slate-900 no-underline hover:text-[#6b5df7] dark:text-white dark:hover:text-[#8b7cf9]">{children}</a>
+);
+
+export const ChipLink = ({ href, children }) => (
+  <a href={href} className="inline-flex rounded-md bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600 no-underline transition hover:bg-[#6b5df7]/10 hover:text-[#6b5df7] dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-[#6b5df7]/20 dark:hover:text-[#8b7cf9]">{children}</a>
+);
+
+export const copyGeneratedSetupPrompt = async (event) => {
+  const button = event.currentTarget;
+  window.focus();
+  button.focus();
+  const promptCard = button.closest("[data-home-setup-prompt='true']");
+  const errorMessage = promptCard == null ? null : promptCard.querySelector("[data-copy-prompt-error='true']");
+  try {
+    let clipboardError = null;
+    let didCopy = false;
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+      try {
+        await navigator.clipboard.writeText(generatedSetupPromptText);
+        didCopy = true;
+      } catch (error) {
+        clipboardError = error;
+      }
+    }
+    if (!didCopy) {
+      const textArea = document.createElement("textarea");
+      textArea.value = generatedSetupPromptText;
+      textArea.readOnly = true;
+      textArea.style.position = "fixed";
+      textArea.style.top = "0";
+      textArea.style.left = "0";
+      textArea.style.opacity = "0";
+      document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+      didCopy = document.execCommand("copy");
+      document.body.removeChild(textArea);
+    }
+    if (!didCopy) {
+      const clipboardErrorMessage = clipboardError instanceof Error ? clipboardError.message : "";
+      throw new Error(clipboardErrorMessage || "Browser clipboard permissions blocked copying.");
+    }
+    if (errorMessage != null) {
+      errorMessage.textContent = "";
+      errorMessage.hidden = true;
+    }
+    button.textContent = "Copied";
+    button.title = "";
+  } catch (error) {
+    const errorText = error instanceof Error ? error.message : "Clipboard copy failed.";
+    button.textContent = "Copy failed";
+    button.title = errorText;
+    if (errorMessage != null) {
+      errorMessage.textContent = errorText;
+      errorMessage.hidden = false;
+    }
+  }
+  window.setTimeout(() => {
+    button.textContent = "Copy prompt";
+    button.title = "";
+    if (errorMessage != null) {
+      errorMessage.textContent = "";
+      errorMessage.hidden = true;
+    }
+  }, 2500);
+};
+
+<div data-home-setup-prompt="true" className="not-prose my-6 rounded-3xl border border-[#d7dff6] bg-gradient-to-br from-[#f6f8ff] via-[#f2f5ff] to-[#edf7ff] p-5 text-zinc-900 shadow-[0_20px_60px_-40px_rgba(50,70,150,0.35)] sm:p-7 dark:border-[#2c3751] dark:bg-gradient-to-br dark:from-[#0c1423] dark:via-[#111b2f] dark:to-[#0b212e] dark:text-zinc-100 dark:shadow-[0_20px_60px_-40px_rgba(0,0,0,0.8)]">
+  <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#4f5f95] dark:text-[#8ea4d2]">
+    Agent-first setup
+  </p>
+
+  <h1 className="mt-3 text-4xl font-semibold tracking-tight text-zinc-900 sm:text-5xl dark:text-zinc-50">
+    Set up with one prompt.
+  </h1>
+  <p className="mt-3 max-w-3xl text-base leading-7 text-zinc-600 dark:text-zinc-300">
+    Copy the full Hexclave setup prompt into your coding agent, or follow the manual instructions.
+  </p>
+
+  <div className="mt-6 overflow-hidden rounded-2xl border border-[#cdd7f4] bg-white/75 backdrop-blur-sm dark:border-[#33476d] dark:bg-black/20">
+    <pre className="max-h-80 overflow-auto whitespace-pre-wrap px-4 py-3 font-mono text-xs leading-6 text-zinc-700 sm:text-sm dark:text-zinc-200"><code>{generatedSetupPromptText}</code></pre>
+  </div>
+  <p data-copy-prompt-error="true" hidden className="mt-2 text-xs font-medium text-red-700 dark:text-red-300" />
+
+  <div className="mt-5 flex flex-col gap-3 sm:flex-row">
+    <a
+      href="/guides/getting-started/setup"
+      className="inline-flex items-center justify-center rounded-xl bg-[#1e2f57] px-5 py-3 text-sm font-semibold !text-[#eef4ff] no-underline transition-colors duration-150 hover:transition-none hover:bg-[#253a6b] dark:bg-[#1e2f57] dark:hover:bg-[#253a6b] dark:!text-[#eef4ff]"
+    >
+      View manual setup instructions
+    </a>
+    <button
+      type="button"
+      onClick={copyGeneratedSetupPrompt}
+      className="inline-flex items-center justify-center rounded-xl border border-[#9fb5e4] bg-white/60 px-5 py-3 text-sm font-semibold text-[#1f3764] transition-colors duration-150 hover:transition-none hover:bg-white/85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2 focus-visible:ring-offset-[#f3f6ff] dark:border-[#3d5a91] dark:bg-transparent dark:text-[#d7e7ff] dark:hover:bg-white/10 dark:focus-visible:ring-offset-[#0f1a2e]"
+    >
+      Copy prompt
+    </button>
+  </div>
+</div>
+
+<Visibility for="agents">
+{hexclaveAgentRemindersText}
+</Visibility>
+
+<div className="mx-auto mt-20 max-w-7xl px-4 sm:px-6 lg:px-8">
+  <div>
+    <h2 className="text-3xl font-bold tracking-tight text-slate-900 dark:text-white">Navigate Through Our Docs</h2>
+    <p className="mt-3 max-w-3xl text-base text-slate-600 dark:text-slate-300">
+      Start at the top and work your way down, or jump straight to the section you need.
+    </p>
+  </div>
+
+  <h3 className="mt-10 mb-6 text-lg font-semibold text-slate-500 dark:text-slate-400">Recommended Order</h3>
+
+  <div className="relative mt-2 ml-4 border-l-2 border-slate-200 pl-8 dark:border-slate-700">
+    {/* Getting Started */}
+    <div className="relative mb-10">
+      <div className="absolute -left-[2.55rem] top-0.5 h-4 w-4 rounded-full border-2 border-[#6b5df7] bg-[#6b5df7]" />
+      <SectionLink href="/guides/getting-started/setup">Getting Started</SectionLink>
+      <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">First-time setup, install the SDK, get auth running in minutes.</p>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <ChipLink href="/guides/getting-started/setup">Setup</ChipLink>
+        <ChipLink href="/guides/getting-started/user-fundamentals">Users</ChipLink>
+        <ChipLink href="/guides/getting-started/ai-integration">AI Integration</ChipLink>
+        <ChipLink href="/guides/apps/launch-checklist/overview">Production</ChipLink>
+      </div>
+    </div>
+
+    {/* Explore Apps */}
+    <div className="relative mb-10">
+      <div className="absolute -left-[2.55rem] top-0.5 h-4 w-4 rounded-full border-2 border-[#6b5df7] bg-[#6b5df7]" />
+      <SectionLink href="/guides/apps/authentication/overview">Explore Apps</SectionLink>
+      <DocsAppsHomeGrid />
+    </div>
+
+    {/* Going Further */}
+    <div className="relative mb-10">
+      <div className="absolute -left-[2.55rem] top-0.5 h-4 w-4 rounded-full border-2 border-[#6b5df7] bg-[#6b5df7]" />
+      <SectionLink href="/guides/going-further/local-vs-cloud-dashboard">Going Further</SectionLink>
+      <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+        Compare development flows, configure your project, and use lower-level interfaces where needed.
+      </p>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <ChipLink href="/guides/going-further/local-vs-cloud-dashboard">Local vs. Cloud</ChipLink>
+        <ChipLink href="/guides/going-further/hexclave-config">Config File</ChipLink>
+        <ChipLink href="/guides/going-further/cli">CLI</ChipLink>
+      </div>
+    </div>
+
+    {/* SDK Reference */}
+    <div className="relative mb-10">
+      <div className="absolute -left-[2.55rem] top-0.5 h-4 w-4 rounded-full border-2 border-[#6b5df7] bg-[#6b5df7]" />
+      <SectionLink href="/sdk/overview">SDK Reference</SectionLink>
+      <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+        Use hooks, objects, and types to read and write auth data directly in your app code.
+      </p>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <ChipLink href="/sdk/hooks/use-user">useUser</ChipLink>
+        <ChipLink href="/sdk/objects/hexclave-app">StackApp</ChipLink>
+        <ChipLink href="/sdk/types/user">User Type</ChipLink>
+      </div>
+    </div>
+
+    {/* REST API */}
+    <div className="relative mb-4">
+      <div className="absolute -left-[2.55rem] top-0.5 h-4 w-4 rounded-full border-2 border-[#6b5df7] bg-[#6b5df7]" />
+      <SectionLink href="/api/overview">REST API</SectionLink>
+      <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+        Integrate Hexclave from any backend or language through HTTP endpoints and webhook flows.
+      </p>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <ChipLink href="/api/overview">Overview</ChipLink>
+        <ChipLink href="/guides/apps/webhooks/overview">Webhooks</ChipLink>
+        <ChipLink href="/guides/getting-started/setup">Backend Setup</ChipLink>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div className="mx-auto mt-20 max-w-7xl px-4 pb-16 sm:px-6 lg:px-8">
+    <div>
+      <h2 className="text-3xl font-bold tracking-tight text-slate-900 dark:text-white">Resources</h2>
+      <p className="mt-3 max-w-3xl text-base text-slate-600 dark:text-slate-300">
+        Reach for product access, source code, and support channels when you need more than reference docs.
+      </p>
+    </div>
+
+    <CardGroup cols={3}>
+      <Card title="Dashboard" icon="table-columns" href="https://app.hexclave.com" cta="Open app" target="_blank" rel="noopener noreferrer">
+        Manage projects, keys, providers, and authentication settings.
+      </Card>
+      <Card title="GitHub" icon="github" href="https://github.com/hexclave/hexclave" cta="View repository">
+        Explore the open-source codebase, examples, and release history.
+      </Card>
+      <Card title="Discord" icon="comments" href="https://discord.hexclave.com" cta="Join community">
+        Ask questions, share feedback, and get help from the community.
+      </Card>
+    </CardGroup>
+
+</div>

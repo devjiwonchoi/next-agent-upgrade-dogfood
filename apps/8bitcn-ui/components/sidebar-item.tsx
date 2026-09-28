@@ -1,0 +1,31 @@
+"use client";
+
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+
+import { Badge } from "./ui/8bit/badge";
+import { SidebarMenuButton, SidebarMenuItem } from "./ui/sidebar";
+
+interface SidebarItemProps {
+  item: {
+    title: string;
+    url: string;
+    new?: boolean;
+  };
+}
+
+export default function SidebarItem({ item }: SidebarItemProps) {
+  const pathname = usePathname();
+  const isActive = pathname === item.url;
+
+  return (
+    <SidebarMenuItem key={item.title}>
+      <SidebarMenuButton asChild isActive={isActive}>
+        <Link className="flex items-center justify-between" href={item.url}>
+          {item.title}
+          {item.new && <Badge className="text-[9px]">new</Badge>}
+        </Link>
+      </SidebarMenuButton>
+    </SidebarMenuItem>
+  );
+}

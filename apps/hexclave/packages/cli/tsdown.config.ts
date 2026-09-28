@@ -1,0 +1,25 @@
+import { defineConfig, type UserConfig } from 'tsdown';
+
+const config: UserConfig = {
+  entry: ['src/index.ts'],
+  sourcemap: true,
+  clean: false,
+  dts: true,
+  outDir: 'dist',
+  deps: {
+    neverBundle: ['@anthropic-ai/claude-agent-sdk'],
+  },
+  define: {
+    __STACK_CLI_SENTRY_DSN__: JSON.stringify(process.env.STACK_CLI_SENTRY_DSN_BUILD ?? ''),
+  },
+  format: {
+    esm: {
+      outExtensions: () => ({ js: '.js', dts: '.d.ts' }),
+    },
+  },
+  banner: {
+    js: '#!/usr/bin/env node',
+  },
+};
+
+export default defineConfig(config);

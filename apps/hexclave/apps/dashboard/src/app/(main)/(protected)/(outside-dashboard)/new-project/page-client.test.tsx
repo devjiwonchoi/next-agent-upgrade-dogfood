@@ -1,0 +1,208 @@
+// @vitest-environment jsdom
+
+import type { ButtonHTMLAttributes } from "react";
+import { readFileSync } from "fs";
+import { dirname, join } from "path";
+import { fileURLToPath } from "url";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+
+// JSDOM does not ship `window.matchMedia`, and modules transitively imported by
+// `./page-client` (theme.tsx via code-block.tsx) call it at module-load time.
+// Stub it before those imports run so the test file can be evaluated.
+vi.hoisted(() => {
+  if (typeof window !== "undefined" && typeof window.matchMedia !== "function") {
+    Object.defineProperty(window, "matchMedia", {
+      writable: true,
+      configurable: true,
+      value: (query: string) => ({
+        matches: false,
+        media: query,
+        onchange: null,
+        addListener: () => {},
+        removeListener: () => {},
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        dispatchEvent: () => false,
+      }),
+    });
+  }
+});
+
+vi.mock("@/components/ui", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/components/ui")>();
+
+  type MockButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
+    variant?: string,
+  };
+
+  return {
+    ...actual,
+    Button: ({ children, type, variant: _variant, ...props }: MockButtonProps) => (
+      <button type={type ?? "button"} {...props}>
+        {children}
+      </button>
+    ),
+  };
+});
+
+import { TooltipProvider } from "@/components/ui";
+
+import {
+  beginPendingAction,
+  DomainSetupTransitionState,
+  endPendingAction,
+  OnboardingAppCard,
+  OnboardingPage,
+} from "./page-client";
+
+afterEach(() => {
+  cleanup();
+});
+
+describe("beginPendingAction", () => {
+  it("blocks duplicate starts until the action finishes", () => {
+    const pendingRef = { current: false };
+    const setPending = vi.fn();
+
+    expect(beginPendingAction(pendingRef, setPending)).toBe(true);
+    expect(beginPendingAction(pendingRef, setPending)).toBe(false);
+    expect(setPending.mock.calls).toEqual([[true]]);
+
+    endPendingAction(pendingRef, setPending);
+
+    expect(pendingRef.current).toBe(false);
+    expect(setPending.mock.calls).toEqual([[true], [false]]);
+  });
+});
+
+describe("OnboardingPage", () => {
+  it("uses hover-exit-only transitions and accessible labels for progress dots", () => {
+    render(
+      <OnboardingPage
+        stepKey="apps-selection"
+        title="Select apps"
+        steps={[
+          { id: "config_choice", label: "Config" },
+          { id: "apps_selection", label: "Apps" },
+        ]}
+        currentStep="apps_selection"
+        onStepClick={vi.fn()}
+        primaryAction={<button type="button">Continue</button>}
+      >
+        <div>Step body</div>
+      </OnboardingPage>,
+    );
+
+    const completedStepButton = screen.getByRole("button", { name: "Go to step: Config" });
+    const currentStepButton = screen.getByRole("button", { name: "Apps" });
+    const className = completedStepButton.getAttribute("class") ?? "";
+
+    expect(className).toContain("transition-colors");
+    expect(className).toContain("hover:transition-none");
+    expect(currentStepButton.getAttribute("aria-current")).toBe("step");
+    expect(className).toContain("w-[6px]");
+  });
+
+  it("keeps the progress dots centered on a wider rail with the back arrow offset", () => {
+    render(
+      <OnboardingPage
+        stepKey="apps-selection"
+        title="Select apps"
+        steps={[
+          { id: "config_choice", label: "Config" },
+          { id: "apps_selection", label: "Apps" },
+        ]}
+        currentStep="apps_selection"
+        onBack={vi.fn()}
+        primaryAction={<button type="button">Continue</button>}
+      >
+        <div>Step body</div>
+      </OnboardingPage>,
+    );
+
+    const backButtonClassName = screen.getByRole("button", { name: "Go back to previous step" }).getAttribute("class") ?? "";
+    const progressRail = screen.getByRole("button", { name: "Apps" }).closest(".w-\\[150px\\]");
+    const progressRailClassName = progressRail?.getAttribute("class") ?? "";
+
+    expect(backButtonClassName).toContain("inline-flex");
+    expect(backButtonClassName).toContain("absolute");
+    expect(backButtonClassName).toContain("left-0");
+    expect(progressRailClassName).toContain("w-[150px]");
+    expect(progressRailClassName).toContain("justify-center");
+  });
+
+  it("can advance the visual progress independently for route-only pages", () => {
+    render(
+      <OnboardingPage
+        stepKey="setup-new-project"
+        title="Set up Hexclave"
+        steps={[
+          { id: "config_choice", label: "Config" },
+          { id: "apps_selection", label: "Apps" },
+        ]}
+        currentStep="config_choice"
+        progressIndex={1}
+        progressTotal={4}
+        primaryAction={<button type="button">Continue</button>}
+      >
+        <div>Step body</div>
+      </OnboardingPage>,
+    );
+
+    const completedStep = screen.getByRole("button", { name: "Config" });
+    const currentStep = screen.getByRole("button", { name: "Apps" });
+    expect(completedStep.getAttribute("class")).toContain("w-[6px]");
+    expect(currentStep.getAttribute("class")).toContain("w-5");
+    expect(screen.getByRole("button", { name: "Step 3" })).not.toBeNull();
+  });
+});
+
+describe("OnboardingAppCard", () => {
+  it("marks required cards as non-keyboard-interactive", () => {
+    const onToggle = vi.fn();
+
+    render(
+      <TooltipProvider>
+        <OnboardingAppCard
+          appId="authentication"
+          selected
+          required
+          primary
+          onToggle={onToggle}
+        />
+      </TooltipProvider>,
+    );
+
+    const button = screen.getByRole("button");
+    fireEvent.click(button);
+
+    expect(button.getAttribute("aria-disabled")).toBe("true");
+    expect(button.getAttribute("tabindex")).toBe("-1");
+    expect(onToggle).not.toHaveBeenCalled();
+  });
+});
+
+describe("DomainSetupTransitionState", () => {
+  it("shows a retryable fallback when auto-advance fails", () => {
+    const onRetry = vi.fn();
+    const onOpenProject = vi.fn();
+
+    render(
+      <DomainSetupTransitionState
+        advancing={false}
+        errorMessage="Network request failed."
+        onRetry={onRetry}
+        onOpenProject={onOpenProject}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open Project" }));
+
+    expect(screen.getByText("Domain setup transition failed")).toBeTruthy();
+    expect(screen.getByText("Network request failed.")).toBeTruthy();
+    expect(onRetry).toHaveBeenCalledTimes(1);
+    expect(onOpenProject).toHaveBeenCalledTimes(1);
+  });
+});

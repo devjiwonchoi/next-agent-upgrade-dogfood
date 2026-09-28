@@ -1,0 +1,147 @@
+"""The office seam runs the model's generated builder and stores its bytes."""
+
+import pytest
+
+from modules.llm.profile import Tier
+from modules.llm.resolution import ResolvedGeneration
+from worker.studio.office import pipeline as office
+from worker.studio.office import runner
+from worker.studio.office.docx import docx
+from worker.studio.office.pdf import pdf
+from worker.studio.office.pptx import pptx
+from worker.studio.office.xlsx import xlsx
+from worker.studio.shared import generate
+from worker.studio.shared.artifact import Source
+
+pytestmark = pytest.mark.unit
+
+MODEL = ResolvedGeneration(
+    type("Selection", (), {"name": "qwen3:8b", "tier": Tier.CAPABLE})(), None
+)
+
+
+def _model(raw: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stand in for the selected model, returning fixed code."""
+    monkeypatch.setattr(generate, "run_model", lambda *a, **k: raw)
+
+
+def test_render_executes_generated_code_and_keeps_its_bytes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The script sets output_bytes/title/summary; render() lifts them into a Built."""
+    _model(
+        "```python\n"
+        "output_bytes = b'%PDF-1.7 fake'\n"
+        "title = 'Cassini'\n"
+        "summary = '# Cassini\\n\\nArrival in 2004.'\n"
+        "```",
+        monkeypatch,
+    )
+
+    built = office.render(pdf, MODEL, [Source(1, "Saturn", "rings")], None)
+
+    assert built.primary == b"%PDF-1.7 fake"
+    assert built.primary_mime == "application/pdf"
+    assert built.primary_filename == "cassini.pdf"
+    assert built.title == "Cassini"
+    assert "Arrival in 2004." in built.markdown
+
+
+def test_render_uses_the_picked_formats_mime_and_extension(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The user's button fixes the type: a docx job stores a .docx, not whatever."""
+    _model("output_bytes = b'PK\\x03\\x04'\ntitle = 'Deck'", monkeypatch)
+
+    built = office.render(docx, MODEL, [], None)
+
+    assert built.primary_filename == "deck.docx"
+    assert built.primary_mime.endswith("wordprocessingml.document")
+    assert built.markdown == "# Deck"  # summary falls back to the title
+
+
+def test_code_that_forgets_output_bytes_fails_the_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Missing the contract variable is a clear failure, not an empty file."""
+    _model("title = 'oops'", monkeypatch)
+
+    with pytest.raises(RuntimeError, match="output_bytes"):
+        office.render(pdf, MODEL, [], None)
+
+
+def test_code_that_raises_surfaces_the_reason(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A crash inside the generated code becomes the job's error message."""
+    _model("raise ValueError('bad layout')", monkeypatch)
+
+    with pytest.raises(RuntimeError, match="bad layout"):
+        office.render(pptx, MODEL, [], None)
+
+
+def test_render_retries_failed_code_then_keeps_the_fix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A bad import is asked again; the next script that runs is what we store."""
+    replies = iter(
+        [
+            "from reportlab.lib.pagesMS import A4\noutput_bytes = b'nope'",
+            "output_bytes = b'%PDF-ok'\ntitle = 'Cassini'",
+        ]
+    )
+    seen: list[generate.Repair | None] = []
+
+    def fake_model(
+        _session: object,
+        _system: str,
+        _sources: object,
+        *,
+        repair: generate.Repair | None = None,
+    ) -> str:
+        seen.append(repair)
+        return next(replies)
+
+    monkeypatch.setattr(generate, "run_model", fake_model)
+
+    built = office.render(pdf, MODEL, [], None)
+
+    assert built.primary == b"%PDF-ok"
+    assert len(seen) == 2
+    # The retry replays the script that failed: an error naming a line is only
+    # actionable against code the model can see.
+    assert seen[0] is None
+    assert seen[1] is not None
+    assert "pagesMS" in seen[1].reply
+    assert "pagesMS" in seen[1].instruction
+
+
+def test_render_stops_after_three_code_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Three broken scripts fail the job; a fourth is never requested."""
+    calls = 0
+
+    def fake_model(*_a: object, **_k: object) -> str:
+        nonlocal calls
+        calls += 1
+        return "raise ValueError('still broken')"
+
+    monkeypatch.setattr(generate, "run_model", fake_model)
+
+    with pytest.raises(RuntimeError, match="still broken"):
+        office.render(pdf, MODEL, [], None)
+    assert calls == 3
+
+
+def test_execute_times_out_a_hanging_script(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A script that never returns is killed by the timeout, not left to hang."""
+    monkeypatch.setattr(runner, "TIMEOUT_SECONDS", 0.2)
+
+    with pytest.raises(RuntimeError, match="did not finish"):
+        runner.execute("import time\nwhile True:\n    time.sleep(0.05)")
+
+
+def test_each_format_carries_its_skill_and_library() -> None:
+    """Every office folder loaded a non-empty SKILL.md and names its library."""
+    for spec in (docx, pptx, xlsx, pdf):
+        assert spec.skill.strip()
+        assert spec.library in {"python-docx", "python-pptx", "xlsxwriter", "reportlab"}

@@ -1,0 +1,168 @@
+import { teamMembershipsCrudHandlers } from "@/app/api/latest/team-memberships/crud";
+import { logUserRestrictedInBackground } from "@/lib/compliance-events";
+import { sendEmailFromDefaultTemplate } from "@/lib/emails";
+import { getItemQuantityForCustomer } from "@/lib/payments/customer-data";
+import { arePlanLimitsEnforced, UNLIMITED_ITEM_CAPACITY } from "@/lib/plan-entitlements";
+import { getSoleTenancyFromProjectBranch } from "@/lib/tenancies";
+import { getPrismaClientForTenancy } from "@/prisma-client";
+import { createVerificationCodeHandler } from "@/route-handlers/verification-code-handler";
+import { VerificationCodeType } from "@/generated/prisma/client";
+import { KnownErrors } from "@hexclave/shared";
+import { emailSchema, yupNumber, yupObject, yupString } from "@hexclave/shared/dist/schema-fields";
+import { captureError } from "@hexclave/shared/dist/utils/errors";
+import { teamsCrudHandlers } from "../../teams/crud";
+
+export const teamInvitationCodeHandler = createVerificationCodeHandler({
+  metadata: {
+    post: {
+      summary: "Accept the team invitation",
+      description: "Accept invitation and add user to the team",
+      tags: ["Teams"],
+    },
+    check: {
+      summary: "Check if a team invitation code is valid",
+      description: "Check if a team invitation code is valid without using it",
+      tags: ["Teams"],
+    },
+    details: {
+      summary: "Get team invitation details",
+      description: "Get additional information about a team invitation code",
+      tags: ["Teams"],
+    },
+  },
+  type: VerificationCodeType.TEAM_INVITATION,
+  data: yupObject({
+    team_id: yupString().defined(),
+  }).defined(),
+  method: yupObject({
+    email: emailSchema.defined(),
+  }),
+  response: yupObject({
+    statusCode: yupNumber().oneOf([200]).defined(),
+    bodyType: yupString().oneOf(["json"]).defined(),
+    body: yupObject({}).defined(),
+  }),
+  detailsResponse: yupObject({
+    statusCode: yupNumber().oneOf([200]).defined(),
+    bodyType: yupString().oneOf(["json"]).defined(),
+    body: yupObject({
+      team_id: yupString().defined(),
+      team_display_name: yupString().defined(),
+    }).defined(),
+  }),
+  async send(codeObj, createOptions, sendOptions) {
+    const team = await teamsCrudHandlers.adminRead({
+      project: createOptions.project,
+      branchId: createOptions.branchId,
+      team_id: createOptions.data.team_id,
+    });
+
+    await sendEmailFromDefaultTemplate({
+      tenancy: await getSoleTenancyFromProjectBranch(createOptions.project, createOptions.branchId),
+      user: null,
+      email: createOptions.method.email,
+      templateType: "team_invitation",
+      extraVariables: {
+        teamInvitationLink: codeObj.link.toString(),
+        teamDisplayName: team.display_name,
+      },
+      shouldSkipDeliverabilityCheck: true,
+    });
+
+    return codeObj;
+  },
+  async handler(tenancy, {}, data, body, user) {
+    if (!user) throw new KnownErrors.UserAuthenticationRequired;
+    if (user.restricted_reason) {
+      logUserRestrictedInBackground(tenancy, {
+        userId: user.id,
+        restrictedReason: user.restricted_reason.type,
+      });
+      throw new KnownErrors.TeamInvitationRestrictedUserNotAllowed(user.restricted_reason);
+    }
+    const prisma = await getPrismaClientForTenancy(tenancy);
+
+    if (tenancy.project.id === "internal" && arePlanLimitsEnforced()) {
+      const currentMemberCount = await prisma.teamMember.count({
+        where: {
+          tenancyId: tenancy.id,
+          teamId: data.team_id,
+        },
+      });
+      const item = tenancy.config.payments.items["dashboard_admins"] as any;
+      if (!item) {
+        throw new KnownErrors.ItemNotFound("dashboard_admins");
+      }
+      // The seat cap lives in bulldozer, but accepting a team invite must not
+      // hard-depend on it: if bulldozer is unreachable, report it and skip the
+      // check this once (treat the cap as unlimited) rather than blocking the
+      // invite. The cap is re-enforced on the next accept once bulldozer is back.
+      let maxDashboardAdmins: number;
+      try {
+        maxDashboardAdmins = await getItemQuantityForCustomer({
+          prisma,
+          tenancyId: tenancy.id,
+          customerId: data.team_id,
+          itemId: "dashboard_admins",
+          customerType: "team",
+        });
+      } catch (error) {
+        captureError("team-invitations:accept:dashboard-admins-seat-check", error);
+        maxDashboardAdmins = UNLIMITED_ITEM_CAPACITY;
+      }
+      if (currentMemberCount + 1 > maxDashboardAdmins) {
+        throw new KnownErrors.ItemQuantityInsufficientAmount("dashboard_admins", data.team_id, -1);
+      }
+    }
+
+
+    const oldMembership = await prisma.teamMember.findUnique({
+      where: {
+        tenancyId_projectUserId_teamId: {
+          tenancyId: tenancy.id,
+          projectUserId: user.id,
+          teamId: data.team_id,
+        },
+      },
+    });
+
+    if (!oldMembership) {
+      await teamMembershipsCrudHandlers.adminCreate({
+        tenancy,
+        team_id: data.team_id,
+        user_id: user.id,
+        data: {},
+      });
+    }
+
+    return {
+      statusCode: 200,
+      bodyType: "json",
+      body: {}
+    };
+  },
+  async details(tenancy, {}, data, body, user) {
+    if (!user) throw new KnownErrors.UserAuthenticationRequired;
+    if (user.restricted_reason) {
+      logUserRestrictedInBackground(tenancy, {
+        userId: user.id,
+        restrictedReason: user.restricted_reason.type,
+      });
+      throw new KnownErrors.TeamInvitationRestrictedUserNotAllowed(user.restricted_reason);
+    }
+
+    const team = await teamsCrudHandlers.adminRead({
+      tenancy,
+      team_id: data.team_id,
+    });
+
+    return {
+      statusCode: 200,
+      bodyType: "json",
+      body: {
+        team_id: team.id,
+        team_display_name: team.display_name,
+      },
+    };
+  }
+});

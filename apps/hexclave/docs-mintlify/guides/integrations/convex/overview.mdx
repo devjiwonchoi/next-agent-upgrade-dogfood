@@ -1,0 +1,75 @@
+---
+title: Convex
+description: Integrate Hexclave with Convex
+---
+
+This guide shows how to integrate Hexclave with Convex.
+
+### 1) Create a Convex + Next.js app
+
+First, initialize a new Convex + Next.js app:
+
+```bash title="Terminal"
+npm create convex@latest # make sure to choose "Next.js" and "No auth" when asked — we will add auth later
+```
+
+Then, run `npx convex dev` to start the Convex backend, and `npm run dev` to start the development server.
+
+### 2) Install Hexclave
+
+Next, open your app directory and follow the [Hexclave setup prompt](/guides/getting-started/setup). Choose **Next.js** and **Convex** in the setup builder, then copy the generated prompt into your coding agent.
+
+### 3) Create a Hexclave project
+
+[Create a new Hexclave project](https://app.hexclave.com). Get the project ID & API key environment variables from the dashboard.
+
+- Set the `.env.local` file to the environment variables.
+- In Convex, go to the dashboard of your project's deployment, and also set the environment variables there.
+
+### 4) Update code
+
+Next, update or create a file in `convex/auth.config.ts`:
+
+```ts
+import { getConvexProvidersConfig } from "@hexclave/js";  // Vanilla JS
+// or: import { getConvexProvidersConfig } from "@hexclave/react";  // React
+// or: import { getConvexProvidersConfig } from "@hexclave/next";  // Next.js
+
+export default {
+  providers: getConvexProvidersConfig({
+    projectId: process.env.HEXCLAVE_PROJECT_ID,  // or: process.env.NEXT_PUBLIC_HEXCLAVE_PROJECT_ID
+  }),
+}
+```
+
+Then, update your Convex client to use Hexclave:
+
+```ts
+convexClient.setAuth(hexclaveClientApp.getConvexClientAuth({}));  // browser JS
+convexReactClient.setAuth(hexclaveClientApp.getConvexClientAuth({}));  // React
+convexHttpClient.setAuth(hexclaveClientApp.getConvexHttpClientAuth({ tokenStore: requestObject }));  // HTTP, see Hexclave docs for more information on tokenStore
+```
+
+### 5) Done!
+
+Done! Now, you'll be able to access Hexclave's functionality from your frontend & backend:
+
+```ts
+// MyPage.tsx
+export function MyPage() {
+  // see https://docs.hexclave.com for more information on how to use Hexclave
+  const user = useUser();
+  return <div>Your email is {user.email}</div>;
+}
+
+// myFunctions.ts
+export const myQuery = query({
+  handler: async (ctx, args) => {
+    // In queries & mutations, use the special `getPartialUser` function to get user info
+    const obj = await hexclaveServerApp.getPartialUser({ from: "convex", ctx });
+    return JSON.stringify(obj);
+  },
+});
+```
+
+You can find the production-ready template with Stack-Auth, Convex & Shadcn pre-configured [here on GitHub](https://github.com/developing-gamer/next-convex-stack-template).
