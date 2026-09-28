@@ -16,6 +16,7 @@ Each `apps/` directory is copied from the listed public source commit. Upgrade b
 | Novel | `steven-tey/novel` | `fa95098e66476c466faebb8211baa5869c101a9c` | `apps/novel/apps/web` |
 | React.dev | `reactjs/react.dev` | `44b0b5f10b7f6477bf146d26444717fb4930439f` | `apps/react-dev` |
 | Invoify | `al1abb/invoify` | `3859b3cbae28ca4ec559db5ef87e41b798740340` | `apps/invoify` |
+| Overreacted | `gaearon/overreacted.io` | `28b60689a69b11892bad7c4456edb9c63868ce0b` | `apps/overreacted` |
 | OpenStock | `Open-Dev-Society/OpenStock` | `0248d5d9284b8b9fae4ae82a211d30fe4b88fe09` | `apps/openstock` |
 | Dub | `dubinc/dub` | `21c57aed421d9cb5726bc078242f2bc996414c78` | `apps/dub/apps/web` |
 | CodePilot | `op7418/CodePilot` | `1ae6d76de6993377dab961eacf04927babd99eb1` | `apps/codepilot/apps/site` |
@@ -26,5 +27,5 @@ Each `apps/` directory is copied from the listed public source commit. Upgrade b
 
 Glass includes its pinned `aec` submodule contents at `9e11f4f95707714464194bdfc9db0222ec5c6163`. These are source snapshots, not upstream Git histories.
 
-Overreacted (`gaearon/overreacted.io@28b60689a69b11892bad7c4456edb9c63868ce0b`) is excluded from this public snapshot because its repository contains no license or redistribution permission.
+Overreacted has no repository license file; the dogfood repository owner confirmed redistribution permission for this snapshot.
 The Supabase snapshot omits `apps/ui-library/.env` and `examples/product-sample-supabase-kt/local.properties`; they are local configuration files outside the selected Studio app.
