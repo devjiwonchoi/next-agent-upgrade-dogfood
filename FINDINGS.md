@@ -26,4 +26,4 @@ Source snapshots and this report live on `main`. Each upgrade runs on its own br
 | AGENT-005 | P1 | NextChat's Yarn upgrade path invoked `npm install` and left a partial manifest after failure. | Respect the app package manager and restore files on failure. |
 | AGENT-006 | P2 | Glass and Papermark received ESLint configs that fail to load. | Fix the generated flat-config import and shape. |
 
-Independent static reviews found no actionable code defect in Novel PR #2 or Cal.diy PR #4. OpenResume PR #3 still needs independent review and a decision on its React 19 peer conflicts. A passing build does not establish a working service-backed feature. Keep blocked migrations out of `main`; record their exact outcome here.
+Independent static reviews found no actionable code defect in Novel PR #2 or Cal.diy PR #4. OpenResume PR #3 still needs independent review and a decision on its React 19 peer conflicts. None of the three new PRs has CI checks. A passing build does not establish a working service-backed feature. Keep blocked migrations out of `main`; record their exact outcome here.
